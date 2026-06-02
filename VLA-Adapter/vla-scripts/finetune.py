@@ -1225,9 +1225,7 @@ def finetune(cfg: FinetuneConfig) -> None:
     recent_metrics = {
         "loss_value": deque(maxlen=cfg.grad_accumulation_steps),
         "action_l1_loss": deque(maxlen=cfg.grad_accumulation_steps),
-        "curr_action_accuracy": deque(maxlen=cfg.grad_accumulation_steps),
         "curr_action_l1_loss": deque(maxlen=cfg.grad_accumulation_steps),
-        "next_actions_accuracy": deque(maxlen=cfg.grad_accumulation_steps),
         "next_actions_l1_loss": deque(maxlen=cfg.grad_accumulation_steps),
         "pair/align_loss": deque(maxlen=cfg.grad_accumulation_steps),
         "pair/init_gate": deque(maxlen=cfg.grad_accumulation_steps),
@@ -1235,6 +1233,8 @@ def finetune(cfg: FinetuneConfig) -> None:
     if cfg.pair_log_debug_metrics:
         recent_metrics.update(
             {
+                "curr_action_accuracy": deque(maxlen=cfg.grad_accumulation_steps),
+                "next_actions_accuracy": deque(maxlen=cfg.grad_accumulation_steps),
                 "pair/lambda": deque(maxlen=cfg.grad_accumulation_steps),
                 "pair/init_gate_raw": deque(maxlen=cfg.grad_accumulation_steps),
                 "pair/init_delta_norm": deque(maxlen=cfg.grad_accumulation_steps),
