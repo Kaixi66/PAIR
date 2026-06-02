@@ -848,14 +848,16 @@ class OpenVLAForActionPrediction(PrismaticForConditionalGeneration):
         # Extract hidden states for action tokens
         multi_layer_hidden_states = []
         
+        batch_size = input_embeddings.shape[0]
         for item in language_model_output.hidden_states[0:]:
             # last_hidden_states = output.hidden_states[-1]  # (B, seq_len, D)
             # Get hidden states for text portion of prompt+response (after the vision patches)
             text_hidden_states = item
             # Get hidden states for action portion of response
-            actions_hidden_states = text_hidden_states[:, NUM_PATCHES+ NUM_PROMPT_TOKENS : NUM_PATCHES + NUM_PROMPT_TOKENS + NUM_TOKENS, :,].reshape(1, 1, NUM_TOKENS, -1).to(torch.bfloat16)
+            actions_hidden_states = text_hidden_states[
+                :, NUM_PATCHES + NUM_PROMPT_TOKENS : NUM_PATCHES + NUM_PROMPT_TOKENS + NUM_TOKENS, :
+            ].reshape(batch_size, 1, NUM_TOKENS, -1).to(torch.bfloat16)
             
-            batch_size = item.shape[0]
             task_latten_states = item[:, :NUM_PATCHES].reshape(batch_size, 1, NUM_PATCHES , -1)
             all_hidden_states = torch.cat((task_latten_states, actions_hidden_states),2)
             multi_layer_hidden_states.append(all_hidden_states)

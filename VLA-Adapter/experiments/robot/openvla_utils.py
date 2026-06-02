@@ -221,6 +221,19 @@ def find_checkpoint_files(pretrained_checkpoint: str, file_pattern: str) -> List
     return sorted(checkpoint_files)
 
 
+def _checkpoint_sort_key(path: str) -> Tuple[int, str]:
+    """Prefer latest checkpoints, then highest numeric step, then lexical order."""
+    filename = os.path.basename(path)
+    if "latest_checkpoint" in filename:
+        return (10**18, filename)
+
+    step = -1
+    stem = filename.split("--", 1)[-1].split("_checkpoint", 1)[0]
+    if stem.isdigit():
+        step = int(stem)
+    return (step, filename)
+
+
 def find_checkpoint_file(pretrained_checkpoint: str, file_pattern: str) -> str:
     """
     Find a specific checkpoint file matching a pattern.
@@ -237,18 +250,23 @@ def find_checkpoint_file(pretrained_checkpoint: str, file_pattern: str) -> str:
     """
     checkpoint_files = find_checkpoint_files(pretrained_checkpoint, file_pattern)
 
-    assert len(checkpoint_files) == 1, (
-        f"Expected exactly 1 {file_pattern} checkpoint but found {len(checkpoint_files)} in directory: {pretrained_checkpoint}"
+    assert len(checkpoint_files) >= 1, (
+        f"Expected at least 1 {file_pattern} checkpoint but found none in directory: {pretrained_checkpoint}"
     )
+    if len(checkpoint_files) > 1:
+        latest_files = [path for path in checkpoint_files if "latest_checkpoint" in os.path.basename(path)]
+        assert len(latest_files) <= 1, (
+            f"Found multiple latest {file_pattern} checkpoints in directory: {pretrained_checkpoint}"
+        )
 
-    return checkpoint_files[0]
+    return max(checkpoint_files, key=_checkpoint_sort_key)
 
 
 def checkpoint_has_component(pretrained_checkpoint: str, file_pattern: str) -> bool:
-    """Return whether a local checkpoint contains exactly one matching component checkpoint."""
+    """Return whether a local checkpoint contains at least one matching component checkpoint."""
     if model_is_on_hf_hub(pretrained_checkpoint) or not os.path.isdir(pretrained_checkpoint):
         return False
-    return len(find_checkpoint_files(pretrained_checkpoint, file_pattern)) == 1
+    return len(find_checkpoint_files(pretrained_checkpoint, file_pattern)) >= 1
 
 
 def load_eval_config_from_checkpoint(pretrained_checkpoint: str) -> Dict[str, Any]:

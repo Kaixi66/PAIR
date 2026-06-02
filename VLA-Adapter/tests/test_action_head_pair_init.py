@@ -40,3 +40,28 @@ def test_action_head_initial_action_states_preserve_zero_default():
 
     assert default_actions.shape == (batch_size, NUM_ACTIONS_CHUNK, 7)
     assert torch.allclose(default_actions, explicit_zero_actions)
+
+
+def test_action_head_predict_action_without_proprio_forward():
+    torch.manual_seed(11)
+    hidden_dim = 16
+    batch_size = 2
+    num_task_tokens = 2
+    num_layers = 25
+    action_head = L1RegressionActionHead(
+        input_dim=hidden_dim,
+        hidden_dim=hidden_dim,
+        action_dim=7,
+        num_task_tokens=num_task_tokens,
+        use_pro_version=False,
+    )
+    hidden_states = torch.randn(batch_size, num_layers, num_task_tokens + NUM_TOKENS, hidden_dim)
+
+    actions = action_head.predict_action(
+        hidden_states,
+        proprio=None,
+        proprio_projector=None,
+        phase="Inference",
+    )
+
+    assert actions.shape == (batch_size, NUM_ACTIONS_CHUNK, 7)
