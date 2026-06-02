@@ -61,6 +61,17 @@ def test_pair_bridge_fixed_gate_mode():
     assert "init_gate" in dict(bridge.named_buffers())
 
 
+def test_pair_bridge_keeps_init_gate_fp32_after_bf16_cast():
+    config = PairBridgeConfig(llm_dim=64, bridge_dim=32, latent_dim=8, horizon=8, action_dim=7, num_heads=4)
+    bridge = PairBridge(config).to(torch.bfloat16)
+
+    bridge.keep_init_gate_fp32()
+
+    assert bridge.down_proj.weight.dtype == torch.bfloat16
+    assert bridge.init_gate.dtype == torch.float32
+    assert dict(bridge.named_parameters())["init_gate"].dtype == torch.float32
+
+
 def test_pair_bridge_perception_mask():
     config = PairBridgeConfig(llm_dim=64, bridge_dim=32, latent_dim=8, horizon=8, action_dim=7, num_heads=4)
     bridge = PairBridge(config)

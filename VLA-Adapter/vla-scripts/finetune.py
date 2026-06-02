@@ -10,7 +10,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Type
+from typing import Callable, Dict, Optional, Tuple, Type
 import torch.nn.functional as F
 import draccus
 import torch
@@ -282,6 +282,7 @@ def init_module(
     module_args: dict,
     to_bf16: bool = False,
     find_unused_params: bool = False,
+    post_bf16_hook: Optional[Callable[[nn.Module], None]] = None,
 ) -> DDP:
     """
     Initializes a module, optionally loads checkpoint, moves to device, and wraps with DDP.
@@ -308,6 +309,8 @@ def init_module(
 
     if to_bf16:
         module = module.to(torch.bfloat16)
+        if post_bf16_hook is not None:
+            post_bf16_hook(module)
     module = module.to(device_id)
 
     return wrap_ddp(module, device_id, find_unused_params)
@@ -1108,6 +1111,7 @@ def finetune(cfg: FinetuneConfig) -> None:
             {"config": pair_bridge_config},
             to_bf16=True,
             find_unused_params=True,
+            post_bf16_hook=lambda module: module.keep_init_gate_fp32(),
         )
         action_ae_encoder = load_frozen_action_encoder(cfg.pair_action_ae_encoder_path, device=device_id)
 

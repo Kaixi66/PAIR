@@ -75,6 +75,13 @@ class PairBridge(nn.Module):
     def reset_parameters(self) -> None:
         nn.init.normal_(self.bridge_queries, mean=0.0, std=0.02)
 
+    def keep_init_gate_fp32(self) -> None:
+        """Keep the scalar init gate in fp32 after bulk bf16 conversion."""
+        if isinstance(self.init_gate, nn.Parameter):
+            self.init_gate = nn.Parameter(self.init_gate.detach().float(), requires_grad=self.init_gate.requires_grad)
+        else:
+            self.init_gate = self.init_gate.detach().float()
+
     def forward(
         self,
         perception_tokens: Tensor,
