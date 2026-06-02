@@ -20,7 +20,6 @@ class PairBridgeConfig:
     action_dim: int = 7
     num_heads: int = 8
     dropout: float = 0.0
-    init_alpha: float = 1.0
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -113,9 +112,7 @@ class PairBridge(nn.Module):
         )
         action_init_delta = per_dim_init.reshape(batch_size, expected_slots, self.config.llm_dim)
         gate = torch.tanh(self.init_gate).to(dtype=base_action_init.dtype)
-        action_init = base_action_init + float(self.config.init_alpha) * gate * action_init_delta.to(
-            dtype=base_action_init.dtype
-        )
+        action_init = base_action_init + gate * action_init_delta.to(dtype=base_action_init.dtype)
 
         return PairBridgeOutput(
             action_init=action_init,

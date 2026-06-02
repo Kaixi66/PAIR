@@ -151,7 +151,6 @@ class FinetuneConfig:
     pair_align_weight: float = 0.05
     pair_align_warmup_ratio: float = 0.05
     pair_bridge_dim: int = 512
-    pair_init_alpha: float = 1.0
     # fmt: on
 
 
@@ -1081,7 +1080,6 @@ def finetune(cfg: FinetuneConfig) -> None:
             latent_dim=16,
             horizon=NUM_ACTIONS_CHUNK,
             action_dim=ACTION_DIM,
-            init_alpha=cfg.pair_init_alpha,
         )
         pair_bridge = init_module(
             PairBridge,

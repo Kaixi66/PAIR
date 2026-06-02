@@ -23,7 +23,6 @@ USE_PRO_VERSION="${USE_PRO_VERSION:-False}"
 PAIR_ALIGN_WEIGHT="${PAIR_ALIGN_WEIGHT:-0.05}"
 PAIR_ALIGN_WARMUP_RATIO="${PAIR_ALIGN_WARMUP_RATIO:-0.05}"
 PAIR_BRIDGE_DIM="${PAIR_BRIDGE_DIM:-512}"
-PAIR_INIT_ALPHA="${PAIR_INIT_ALPHA:-1.0}"
 PAIR_ACTION_AE_ENCODER_PATH="${PAIR_ACTION_AE_ENCODER_PATH:-/umd-datapool/kaixi/PAIR/action_ae_runs/ae_libero_1/encoder.pt}"
 
 WANDB_ENTITY="${WANDB_ENTITY:-kaixi-university-of-maryland}"
@@ -154,7 +153,6 @@ cmd=(
     --pair_align_weight "${PAIR_ALIGN_WEIGHT}"
     --pair_align_warmup_ratio "${PAIR_ALIGN_WARMUP_RATIO}"
     --pair_bridge_dim "${PAIR_BRIDGE_DIM}"
-    --pair_init_alpha "${PAIR_INIT_ALPHA}"
 )
 
 if [[ -n "${EXTRA_ARGS}" ]]; then
