@@ -153,6 +153,7 @@ class FinetuneConfig:
     pair_bridge_dim: int = 512
     pair_init_gate_mode: str = "learnable"
     pair_init_gate_value: float = 0.05
+    pair_log_debug_metrics: bool = False
     # fmt: on
 
 
@@ -543,19 +544,23 @@ def run_forward_pass(
             }
         )
         if pair_align_loss is not None:
-            metrics.update(
-                {
-                    "pair/align_loss": pair_align_loss.item(),
-                    "pair/lambda": pair_lambda,
-                    "pair/init_gate": pair_init_gate.item(),
-                    "pair/init_gate_raw": pair_init_gate_raw.item(),
-                    "pair/init_delta_norm": pair_output.action_init_delta.detach().float().norm(dim=-1).mean().item(),
-                    "pair/init_effective_delta_norm": (
-                        pair_init_gate.abs() * pair_output.action_init_delta.detach().float().norm(dim=-1).mean()
-                    ).item(),
-                    "pair/z_align_norm": pair_output.z_align.detach().float().norm(dim=-1).mean().item(),
-                }
-            )
+            pair_metrics = {
+                "pair/align_loss": pair_align_loss.item(),
+                "pair/init_gate": pair_init_gate.item(),
+            }
+            if cfg.pair_log_debug_metrics:
+                pair_metrics.update(
+                    {
+                        "pair/lambda": pair_lambda,
+                        "pair/init_gate_raw": pair_init_gate_raw.item(),
+                        "pair/init_delta_norm": pair_output.action_init_delta.detach().float().norm(dim=-1).mean().item(),
+                        "pair/init_effective_delta_norm": (
+                            pair_init_gate.abs() * pair_output.action_init_delta.detach().float().norm(dim=-1).mean()
+                        ).item(),
+                        "pair/z_align_norm": pair_output.z_align.detach().float().norm(dim=-1).mean().item(),
+                    }
+                )
+            metrics.update(pair_metrics)
 
         # Get detailed L1 losses for logging
         should_log_l1_loss = use_l1_regression
@@ -1225,13 +1230,18 @@ def finetune(cfg: FinetuneConfig) -> None:
         "next_actions_accuracy": deque(maxlen=cfg.grad_accumulation_steps),
         "next_actions_l1_loss": deque(maxlen=cfg.grad_accumulation_steps),
         "pair/align_loss": deque(maxlen=cfg.grad_accumulation_steps),
-        "pair/lambda": deque(maxlen=cfg.grad_accumulation_steps),
         "pair/init_gate": deque(maxlen=cfg.grad_accumulation_steps),
-        "pair/init_gate_raw": deque(maxlen=cfg.grad_accumulation_steps),
-        "pair/init_delta_norm": deque(maxlen=cfg.grad_accumulation_steps),
-        "pair/init_effective_delta_norm": deque(maxlen=cfg.grad_accumulation_steps),
-        "pair/z_align_norm": deque(maxlen=cfg.grad_accumulation_steps),
     }
+    if cfg.pair_log_debug_metrics:
+        recent_metrics.update(
+            {
+                "pair/lambda": deque(maxlen=cfg.grad_accumulation_steps),
+                "pair/init_gate_raw": deque(maxlen=cfg.grad_accumulation_steps),
+                "pair/init_delta_norm": deque(maxlen=cfg.grad_accumulation_steps),
+                "pair/init_effective_delta_norm": deque(maxlen=cfg.grad_accumulation_steps),
+                "pair/z_align_norm": deque(maxlen=cfg.grad_accumulation_steps),
+            }
+        )
 
     # Start training
     with tqdm.tqdm(total=cfg.max_steps, leave=False) as progress:

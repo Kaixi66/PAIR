@@ -23,14 +23,17 @@ USE_PRO_VERSION="${USE_PRO_VERSION:-False}"
 PAIR_ALIGN_WEIGHT="${PAIR_ALIGN_WEIGHT:-0.05}"
 PAIR_ALIGN_WARMUP_RATIO="${PAIR_ALIGN_WARMUP_RATIO:-0.05}"
 PAIR_BRIDGE_DIM="${PAIR_BRIDGE_DIM:-512}"
+
 PAIR_INIT_GATE_MODE="${PAIR_INIT_GATE_MODE:-learnable}"
-PAIR_INIT_GATE_VALUE="${PAIR_INIT_GATE_VALUE:-0.05}"
+PAIR_INIT_GATE_VALUE="${PAIR_INIT_GATE_VALUE:-0.5}"
+PAIR_LOG_DEBUG_METRICS="${PAIR_LOG_DEBUG_METRICS:-False}"
+
 PAIR_ACTION_AE_ENCODER_PATH="${PAIR_ACTION_AE_ENCODER_PATH:-/umd-datapool/kaixi/PAIR/action_ae_runs/ae_libero_1/encoder.pt}"
 
 WANDB_ENTITY="${WANDB_ENTITY:-kaixi-university-of-maryland}"
 WANDB_PROJECT="${WANDB_PROJECT:-PAIR}"
 export WANDB_MODE="${WANDB_MODE:-online}"
-EXP_NAME="${EXP_NAME:-PAIR_spatial_1}"
+EXP_NAME="${EXP_NAME:-PAIR_L_initGate0.5_spatial}"
 
 DRY_RUN="${DRY_RUN:-false}"
 BACKGROUND="${BACKGROUND:-false}"
@@ -157,6 +160,7 @@ cmd=(
     --pair_bridge_dim "${PAIR_BRIDGE_DIM}"
     --pair_init_gate_mode "${PAIR_INIT_GATE_MODE}"
     --pair_init_gate_value "${PAIR_INIT_GATE_VALUE}"
+    --pair_log_debug_metrics "${PAIR_LOG_DEBUG_METRICS}"
 )
 
 if [[ -n "${EXTRA_ARGS}" ]]; then
@@ -177,6 +181,7 @@ cat <<EOF
 [train_pair_bridge] action_ae_encoder: ${PAIR_ACTION_AE_ENCODER_PATH}
 [train_pair_bridge] pair_align_weight: ${PAIR_ALIGN_WEIGHT}
 [train_pair_bridge] pair_init_gate: mode=${PAIR_INIT_GATE_MODE}, raw_value=${PAIR_INIT_GATE_VALUE}
+[train_pair_bridge] pair_log_debug_metrics: ${PAIR_LOG_DEBUG_METRICS}
 [train_pair_bridge] wandb: ${WANDB_ENTITY}/${WANDB_PROJECT} (${WANDB_MODE})
 [train_pair_bridge] exp_name: ${EXP_NAME}
 [train_pair_bridge] run_root: ${RUN_ROOT_DIR}
