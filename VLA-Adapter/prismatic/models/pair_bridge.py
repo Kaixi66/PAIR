@@ -58,8 +58,7 @@ class PairBridge(nn.Module):
         self.init_proj = nn.Linear(self.config.bridge_dim, self.config.llm_dim, bias=True)
 
         self.slot_scale = nn.Parameter(torch.ones(self.config.action_dim, self.config.llm_dim))
-        self.slot_bias = nn.Parameter(torch.zeros(self.config.action_dim, self.config.llm_dim))
-        self.init_gate = nn.Parameter(torch.zeros(()))
+        self.init_gate = nn.Parameter(torch.full((), 0.05))
 
         self.reset_parameters()
 
@@ -106,10 +105,7 @@ class PairBridge(nn.Module):
 
         z_align = self.align_proj(bridge_tokens)
         z_init = self.init_proj(bridge_tokens)
-        per_dim_init = (
-            z_init.unsqueeze(2) * self.slot_scale.to(dtype=z_init.dtype).unsqueeze(0).unsqueeze(0)
-            + self.slot_bias.to(dtype=z_init.dtype).unsqueeze(0).unsqueeze(0)
-        )
+        per_dim_init = z_init.unsqueeze(2) * self.slot_scale.to(dtype=z_init.dtype).unsqueeze(0).unsqueeze(0)
         action_init_delta = per_dim_init.reshape(batch_size, expected_slots, self.config.llm_dim)
         gate = torch.tanh(self.init_gate).to(dtype=base_action_init.dtype)
         action_init = base_action_init + gate * action_init_delta.to(dtype=base_action_init.dtype)
@@ -168,7 +164,10 @@ def load_pair_bridge_checkpoint(path: str | Path, map_location: str | torch.devi
     payload = torch.load(path, map_location=map_location)
     config = PairBridgeConfig.from_dict(payload["model_config"])
     model = PairBridge(config)
-    model.load_state_dict(payload["state_dict"])
+    state_dict = dict(payload["state_dict"])
+    state_dict.pop("slot_bias", None)
+    state_dict.pop("module.slot_bias", None)
+    model.load_state_dict(state_dict)
     model.eval()
     return model
 

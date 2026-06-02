@@ -10,7 +10,7 @@ from prismatic.models.pair_bridge import (
 )
 
 
-def test_pair_bridge_shapes_and_zero_gate(tmp_path: Path):
+def test_pair_bridge_shapes_and_gate_init(tmp_path: Path):
     config = PairBridgeConfig(llm_dim=4096, bridge_dim=512, latent_dim=16, horizon=8, action_dim=7)
     bridge = PairBridge(config)
     perception_tokens = torch.randn(2, 20, 4096)
@@ -20,7 +20,9 @@ def test_pair_bridge_shapes_and_zero_gate(tmp_path: Path):
 
     assert output.action_init.shape == (2, 56, 4096)
     assert output.z_align.shape == (2, 8, 16)
-    assert torch.allclose(output.action_init, base_init)
+    assert torch.allclose(output.init_gate, torch.tanh(torch.tensor(0.05)))
+    assert not torch.allclose(output.action_init, base_init)
+    assert "slot_bias" not in dict(bridge.named_parameters())
 
     ckpt = tmp_path / "pair_bridge.pt"
     save_pair_bridge_checkpoint(
