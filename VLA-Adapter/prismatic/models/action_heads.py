@@ -7,6 +7,7 @@ Implementations of various action heads, which serve as alternatives to VLM sequ
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from prismatic.vla.constants import ACTION_DIM, ACTION_TOKEN_BEGIN_IDX, IGNORE_INDEX, NUM_ACTIONS_CHUNK, PROPRIO_DIM, STOP_INDEX, NUM_TOKENS
 
 
@@ -47,6 +48,7 @@ class L1RegressionActionHead(nn.Module):
             proprio_projector=None,
             phase="Inference",
             initial_action_states=None,
+            initial_action_gate=None,
             ):
         batch_size = actions_hidden_states.shape[0]
         device = actions_hidden_states.device
@@ -67,23 +69,32 @@ class L1RegressionActionHead(nn.Module):
         task_hidden_states = actions_hidden_states[:, :, :self.num_task_tokens, :]
         actions_hidden_states = actions_hidden_states[:, :, self.num_task_tokens:, :]
 
-        if initial_action_states is None:
-            cond_actions_hidden_states = torch.zeros(
-                (batch_size, self.action_dim * NUM_ACTIONS_CHUNK, self.hidden_dim),
-                device=device, dtype=actions_hidden_states.dtype
-            ).detach()
-        else:
+        cond_actions_hidden_states = torch.zeros(
+            (batch_size, self.action_dim * NUM_ACTIONS_CHUNK, self.hidden_dim),
+            device=device, dtype=actions_hidden_states.dtype
+        ).detach()
+        pair_init_hidden_states = None
+        if initial_action_states is not None:
             expected_shape = (batch_size, self.action_dim * NUM_ACTIONS_CHUNK, self.hidden_dim)
             if tuple(initial_action_states.shape) != expected_shape:
                 raise ValueError(
                     f"Expected initial_action_states with shape {expected_shape}, "
                     f"got {tuple(initial_action_states.shape)}"
                 )
-            cond_actions_hidden_states = initial_action_states.to(device=device, dtype=actions_hidden_states.dtype)
+            if initial_action_gate is None:
+                # Backward-compatible path: use the provided states as the raw action-head input.
+                cond_actions_hidden_states = initial_action_states.to(device=device, dtype=actions_hidden_states.dtype)
+            else:
+                # PAIR path: inject this branch after layer_norm1 + fc1 so the scalar gate is not
+                # immediately normalized away by the action-head input LayerNorm.
+                pair_init_hidden_states = initial_action_states.to(device=device, dtype=actions_hidden_states.dtype)
 
         rearranged_actions_hidden_states = cond_actions_hidden_states.reshape(
             batch_size, NUM_ACTIONS_CHUNK, -1
         )  # (batch, chunk_len, action_dim * hidden_dim)
+        pair_rearranged_action_states = None
+        if pair_init_hidden_states is not None:
+            pair_rearranged_action_states = pair_init_hidden_states.reshape(batch_size, NUM_ACTIONS_CHUNK, -1)
 
         if phase == "Training":
             batch_size, seq_len, dim = rearranged_actions_hidden_states.shape
@@ -94,7 +105,9 @@ class L1RegressionActionHead(nn.Module):
             rearranged_actions_hidden_states,
             h_a=actions_hidden_states,
             p=proprio_features,
-            h_t=task_hidden_states
+            h_t=task_hidden_states,
+            pair_init=pair_rearranged_action_states,
+            pair_gate=initial_action_gate,
             )
 
         return action
@@ -127,11 +140,16 @@ class MLPResNet(nn.Module):
         self.fc2 = nn.Linear(hidden_dim, output_dim)
 
 
-    def forward(self, x, h_a=None, h_t=None, p= None):
+    def forward(self, x, h_a=None, h_t=None, p= None, pair_init=None, pair_gate=None):
  
         # x: (batch_size, input_dim)
         x = self.layer_norm1(x)  # shape: (batch_size, input_dim)
         x = self.fc1(x)  # shape: (batch_size, hidden_dim)
+        if pair_init is not None:
+            pair_x = self.layer_norm1(pair_init)
+            pair_x = F.linear(pair_x, self.fc1.weight, bias=None)
+            gate = pair_gate.to(device=x.device, dtype=x.dtype) if torch.is_tensor(pair_gate) else x.new_tensor(pair_gate)
+            x = x + gate * pair_x
         x = self.relu(x)  # shape: (batch_size, hidden_dim)
         for i, block in enumerate(self.mlp_resnet_blocks):
             x = block(x, h_t = h_t[:,i+1,:], h_a = h_a[:,i+1,:], p=p)  # shape: (batch_size, hidden_dim)

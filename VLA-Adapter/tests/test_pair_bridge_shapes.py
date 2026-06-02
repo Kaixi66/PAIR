@@ -39,6 +39,28 @@ def test_pair_bridge_shapes_and_gate_init(tmp_path: Path):
     assert loaded_output.z_align.shape == (2, 8, 16)
 
 
+def test_pair_bridge_fixed_gate_mode():
+    config = PairBridgeConfig(
+        llm_dim=64,
+        bridge_dim=32,
+        latent_dim=8,
+        horizon=8,
+        action_dim=7,
+        num_heads=4,
+        init_gate_mode="fixed",
+        init_gate_value=0.1,
+    )
+    bridge = PairBridge(config)
+    perception_tokens = torch.randn(2, 6, 64)
+    base_init = torch.zeros(2, 56, 64)
+
+    output = bridge(perception_tokens, base_init)
+
+    assert torch.allclose(output.init_gate, torch.tanh(torch.tensor(0.1)))
+    assert "init_gate" not in dict(bridge.named_parameters())
+    assert "init_gate" in dict(bridge.named_buffers())
+
+
 def test_pair_bridge_perception_mask():
     config = PairBridgeConfig(llm_dim=64, bridge_dim=32, latent_dim=8, horizon=8, action_dim=7, num_heads=4)
     bridge = PairBridge(config)

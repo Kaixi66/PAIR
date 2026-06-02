@@ -151,6 +151,8 @@ class FinetuneConfig:
     pair_align_weight: float = 0.05
     pair_align_warmup_ratio: float = 0.05
     pair_bridge_dim: int = 512
+    pair_init_gate_mode: str = "learnable"
+    pair_init_gate_value: float = 0.05
     # fmt: on
 
 
@@ -477,9 +479,11 @@ def run_forward_pass(
         multi_layer_hidden_states = torch.cat(multi_layer_hidden_states, dim = 1)
 
         initial_action_states = None
+        initial_action_gate = None
         pair_align_loss = None
         pair_lambda = 0.0
         pair_init_gate = None
+        pair_init_gate_raw = None
         if cfg is not None and cfg.use_pair_bridge:
             if pair_bridge is None or action_ae_encoder is None:
                 raise ValueError("PAIR bridge is enabled but pair_bridge/action_ae_encoder was not provided.")
@@ -502,7 +506,8 @@ def run_forward_pass(
                 base_action_init=base_action_init,
                 perception_mask=perception_mask,
             )
-            initial_action_states = pair_output.action_init
+            initial_action_states = pair_output.action_init_delta
+            initial_action_gate = pair_output.init_gate
             with torch.no_grad():
                 action_latents = action_ae_encoder(ground_truth_actions.float()).detach()
 
@@ -514,6 +519,8 @@ def run_forward_pass(
                 warmup_ratio=cfg.pair_align_warmup_ratio,
             )
             pair_init_gate = pair_output.init_gate.detach().float()
+            pair_module = pair_bridge.module if hasattr(pair_bridge, "module") else pair_bridge
+            pair_init_gate_raw = pair_module.init_gate.detach().float()
 
         predicted_actions = action_head.module.predict_action(
             multi_layer_hidden_states,
@@ -521,6 +528,7 @@ def run_forward_pass(
             proprio_projector=proprio_projector if use_proprio else None,
             phase=cfg.phase,
             initial_action_states=initial_action_states,
+            initial_action_gate=initial_action_gate,
             )
 
         action_l1_loss = torch.nn.L1Loss()(predicted_actions, ground_truth_actions)
@@ -540,7 +548,11 @@ def run_forward_pass(
                     "pair/align_loss": pair_align_loss.item(),
                     "pair/lambda": pair_lambda,
                     "pair/init_gate": pair_init_gate.item(),
+                    "pair/init_gate_raw": pair_init_gate_raw.item(),
                     "pair/init_delta_norm": pair_output.action_init_delta.detach().float().norm(dim=-1).mean().item(),
+                    "pair/init_effective_delta_norm": (
+                        pair_init_gate.abs() * pair_output.action_init_delta.detach().float().norm(dim=-1).mean()
+                    ).item(),
                     "pair/z_align_norm": pair_output.z_align.detach().float().norm(dim=-1).mean().item(),
                 }
             )
@@ -1080,6 +1092,8 @@ def finetune(cfg: FinetuneConfig) -> None:
             latent_dim=16,
             horizon=NUM_ACTIONS_CHUNK,
             action_dim=ACTION_DIM,
+            init_gate_mode=cfg.pair_init_gate_mode,
+            init_gate_value=cfg.pair_init_gate_value,
         )
         pair_bridge = init_module(
             PairBridge,
@@ -1213,7 +1227,9 @@ def finetune(cfg: FinetuneConfig) -> None:
         "pair/align_loss": deque(maxlen=cfg.grad_accumulation_steps),
         "pair/lambda": deque(maxlen=cfg.grad_accumulation_steps),
         "pair/init_gate": deque(maxlen=cfg.grad_accumulation_steps),
+        "pair/init_gate_raw": deque(maxlen=cfg.grad_accumulation_steps),
         "pair/init_delta_norm": deque(maxlen=cfg.grad_accumulation_steps),
+        "pair/init_effective_delta_norm": deque(maxlen=cfg.grad_accumulation_steps),
         "pair/z_align_norm": deque(maxlen=cfg.grad_accumulation_steps),
     }
 

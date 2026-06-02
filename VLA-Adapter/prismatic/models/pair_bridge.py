@@ -20,6 +20,8 @@ class PairBridgeConfig:
     action_dim: int = 7
     num_heads: int = 8
     dropout: float = 0.0
+    init_gate_mode: str = "learnable"
+    init_gate_value: float = 0.05
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -58,7 +60,15 @@ class PairBridge(nn.Module):
         self.init_proj = nn.Linear(self.config.bridge_dim, self.config.llm_dim, bias=True)
 
         self.slot_scale = nn.Parameter(torch.ones(self.config.action_dim, self.config.llm_dim))
-        self.init_gate = nn.Parameter(torch.full((), 0.05))
+        init_gate = torch.full((), float(self.config.init_gate_value))
+        if self.config.init_gate_mode == "learnable":
+            self.init_gate = nn.Parameter(init_gate)
+        elif self.config.init_gate_mode == "fixed":
+            self.register_buffer("init_gate", init_gate)
+        else:
+            raise ValueError(
+                f"Unsupported init_gate_mode={self.config.init_gate_mode!r}; expected 'learnable' or 'fixed'."
+            )
 
         self.reset_parameters()
 
