@@ -149,6 +149,10 @@ class MLPResNet(nn.Module):
             pair_x = self.layer_norm1(pair_init)
             pair_x = F.linear(pair_x, self.fc1.weight, bias=None)
             gate = pair_gate.to(device=x.device, dtype=x.dtype) if torch.is_tensor(pair_gate) else x.new_tensor(pair_gate)
+            if gate.ndim == 1:
+                if gate.shape[0] != x.shape[1]:
+                    raise ValueError(f"Expected per-step pair gate with length {x.shape[1]}, got {gate.shape[0]}")
+                gate = gate.view(1, -1, 1)
             x = x + gate * pair_x
         x = self.relu(x)  # shape: (batch_size, hidden_dim)
         for i, block in enumerate(self.mlp_resnet_blocks):

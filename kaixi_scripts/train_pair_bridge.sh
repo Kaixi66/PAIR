@@ -26,6 +26,7 @@ PAIR_BRIDGE_DIM="${PAIR_BRIDGE_DIM:-512}"
 
 PAIR_INIT_GATE_MODE="${PAIR_INIT_GATE_MODE:-learnable}"
 PAIR_INIT_GATE_VALUE="${PAIR_INIT_GATE_VALUE:-0.5}"
+PAIR_INIT_GATE_GRANULARITY="${PAIR_INIT_GATE_GRANULARITY:-per_step}"
 PAIR_LOG_DEBUG_METRICS="${PAIR_LOG_DEBUG_METRICS:-False}"
 
 PAIR_ACTION_AE_ENCODER_PATH="${PAIR_ACTION_AE_ENCODER_PATH:-/umd-datapool/kaixi/PAIR/action_ae_runs/ae_libero_1/encoder.pt}"
@@ -160,6 +161,7 @@ cmd=(
     --pair_bridge_dim "${PAIR_BRIDGE_DIM}"
     --pair_init_gate_mode "${PAIR_INIT_GATE_MODE}"
     --pair_init_gate_value "${PAIR_INIT_GATE_VALUE}"
+    --pair_init_gate_granularity "${PAIR_INIT_GATE_GRANULARITY}"
     --pair_log_debug_metrics "${PAIR_LOG_DEBUG_METRICS}"
 )
 
@@ -180,7 +182,7 @@ cat <<EOF
 [train_pair_bridge] action_ae_dir: ${ACTION_AE_DIR}
 [train_pair_bridge] action_ae_encoder: ${PAIR_ACTION_AE_ENCODER_PATH}
 [train_pair_bridge] pair_align_weight: ${PAIR_ALIGN_WEIGHT}
-[train_pair_bridge] pair_init_gate: mode=${PAIR_INIT_GATE_MODE}, raw_value=${PAIR_INIT_GATE_VALUE}
+[train_pair_bridge] pair_init_gate: mode=${PAIR_INIT_GATE_MODE}, raw_value=${PAIR_INIT_GATE_VALUE}, granularity=${PAIR_INIT_GATE_GRANULARITY}
 [train_pair_bridge] pair_log_debug_metrics: ${PAIR_LOG_DEBUG_METRICS}
 [train_pair_bridge] wandb: ${WANDB_ENTITY}/${WANDB_PROJECT} (${WANDB_MODE})
 [train_pair_bridge] exp_name: ${EXP_NAME}

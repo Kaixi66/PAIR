@@ -110,3 +110,42 @@ def test_action_head_post_norm_pair_gate_controls_injection():
 
     assert torch.allclose(default_actions, zero_gate_actions)
     assert not torch.allclose(default_actions, nonzero_gate_actions)
+
+
+def test_action_head_accepts_per_step_pair_gate():
+    torch.manual_seed(17)
+    hidden_dim = 16
+    batch_size = 2
+    num_task_tokens = 2
+    num_layers = 25
+    action_head = L1RegressionActionHead(
+        input_dim=hidden_dim,
+        hidden_dim=hidden_dim,
+        action_dim=7,
+        num_task_tokens=num_task_tokens,
+        use_pro_version=False,
+    )
+    proprio_projector = nn.Linear(8, hidden_dim).to(torch.bfloat16)
+    hidden_states = torch.randn(batch_size, num_layers, num_task_tokens + NUM_TOKENS, hidden_dim)
+    proprio = torch.randn(batch_size, 8)
+    pair_init = torch.randn(batch_size, 7 * NUM_ACTIONS_CHUNK, hidden_dim)
+
+    zero_step_gate_actions = action_head.predict_action(
+        hidden_states,
+        proprio=proprio,
+        proprio_projector=proprio_projector,
+        phase="Inference",
+        initial_action_states=pair_init,
+        initial_action_gate=torch.zeros(NUM_ACTIONS_CHUNK),
+    )
+    nonzero_step_gate_actions = action_head.predict_action(
+        hidden_states,
+        proprio=proprio,
+        proprio_projector=proprio_projector,
+        phase="Inference",
+        initial_action_states=pair_init,
+        initial_action_gate=torch.linspace(0.1, 0.8, NUM_ACTIONS_CHUNK),
+    )
+
+    assert zero_step_gate_actions.shape == (batch_size, NUM_ACTIONS_CHUNK, 7)
+    assert not torch.allclose(zero_step_gate_actions, nonzero_step_gate_actions)

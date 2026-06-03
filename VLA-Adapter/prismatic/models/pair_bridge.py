@@ -23,6 +23,7 @@ class PairBridgeConfig:
     bridge_mlp_dim: int = 1024
     init_gate_mode: str = "learnable"
     init_gate_value: float = 0.05
+    init_gate_granularity: str = "per_step"
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -33,6 +34,8 @@ class PairBridgeConfig:
         values = {key: value for key, value in data.items() if key in allowed}
         if "bridge_mlp_dim" not in values:
             values["bridge_mlp_dim"] = 0
+        if "init_gate_granularity" not in values:
+            values["init_gate_granularity"] = "scalar"
         return cls(**values)
 
 
@@ -75,7 +78,15 @@ class PairBridge(nn.Module):
         self.init_proj = nn.Linear(self.config.bridge_dim, self.config.llm_dim, bias=True)
 
         self.slot_scale = nn.Parameter(torch.ones(self.config.action_dim, self.config.llm_dim))
-        init_gate = torch.full((), float(self.config.init_gate_value))
+        if self.config.init_gate_granularity == "scalar":
+            init_gate = torch.full((), float(self.config.init_gate_value))
+        elif self.config.init_gate_granularity == "per_step":
+            init_gate = torch.full((self.config.horizon,), float(self.config.init_gate_value))
+        else:
+            raise ValueError(
+                "Unsupported init_gate_granularity="
+                f"{self.config.init_gate_granularity!r}; expected 'scalar' or 'per_step'."
+            )
         if self.config.init_gate_mode == "learnable":
             self.init_gate = nn.Parameter(init_gate)
         elif self.config.init_gate_mode == "fixed":
@@ -145,7 +156,14 @@ class PairBridge(nn.Module):
         per_dim_init = z_init.unsqueeze(2) * self.slot_scale.to(dtype=z_init.dtype).unsqueeze(0).unsqueeze(0)
         action_init_delta = per_dim_init.reshape(batch_size, expected_slots, self.config.llm_dim)
         gate = torch.tanh(self.init_gate).to(dtype=base_action_init.dtype)
-        action_init = base_action_init + gate * action_init_delta.to(dtype=base_action_init.dtype)
+        if gate.ndim == 0:
+            gated_delta = gate * action_init_delta.to(dtype=base_action_init.dtype)
+        else:
+            gated_delta = (
+                gate.view(1, self.config.horizon, 1, 1)
+                * per_dim_init.to(dtype=base_action_init.dtype)
+            ).reshape(batch_size, expected_slots, self.config.llm_dim)
+        action_init = base_action_init + gated_delta
 
         return PairBridgeOutput(
             action_init=action_init,

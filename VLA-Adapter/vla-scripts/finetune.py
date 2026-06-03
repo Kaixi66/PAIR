@@ -153,6 +153,7 @@ class FinetuneConfig:
     pair_bridge_dim: int = 512
     pair_init_gate_mode: str = "learnable"
     pair_init_gate_value: float = 0.05
+    pair_init_gate_granularity: str = "per_step"
     pair_log_debug_metrics: bool = False
     # fmt: on
 
@@ -547,19 +548,30 @@ def run_forward_pass(
             }
         )
         if pair_align_loss is not None:
+            pair_delta = pair_output.action_init_delta.detach().float()
+            if pair_init_gate.ndim == 0:
+                pair_effective_delta_norm = (pair_init_gate.abs() * pair_delta.norm(dim=-1)).mean()
+            else:
+                pair_delta = pair_delta.reshape(
+                    pair_delta.shape[0],
+                    pair_output.z_align.shape[1],
+                    ACTION_DIM,
+                    pair_delta.shape[-1],
+                )
+                pair_effective_delta_norm = (
+                    pair_init_gate.abs().view(1, -1, 1, 1) * pair_delta.norm(dim=-1)
+                ).mean()
             pair_metrics = {
                 "pair/align_loss": pair_align_loss.item(),
-                "pair/init_gate": pair_init_gate.item(),
+                "pair/init_gate": pair_init_gate.mean().item(),
             }
             if cfg.pair_log_debug_metrics:
                 pair_metrics.update(
                     {
                         "pair/lambda": pair_lambda,
-                        "pair/init_gate_raw": pair_init_gate_raw.item(),
+                        "pair/init_gate_raw": pair_init_gate_raw.mean().item(),
                         "pair/init_delta_norm": pair_output.action_init_delta.detach().float().norm(dim=-1).mean().item(),
-                        "pair/init_effective_delta_norm": (
-                            pair_init_gate.abs() * pair_output.action_init_delta.detach().float().norm(dim=-1).mean()
-                        ).item(),
+                        "pair/init_effective_delta_norm": pair_effective_delta_norm.item(),
                         "pair/z_align_norm": pair_output.z_align.detach().float().norm(dim=-1).mean().item(),
                     }
                 )
@@ -1102,6 +1114,7 @@ def finetune(cfg: FinetuneConfig) -> None:
             action_dim=ACTION_DIM,
             init_gate_mode=cfg.pair_init_gate_mode,
             init_gate_value=cfg.pair_init_gate_value,
+            init_gate_granularity=cfg.pair_init_gate_granularity,
         )
         pair_bridge = init_module(
             PairBridge,

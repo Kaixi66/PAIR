@@ -20,9 +20,12 @@ def test_pair_bridge_shapes_and_gate_init(tmp_path: Path):
 
     assert output.action_init.shape == (2, 56, 4096)
     assert output.z_align.shape == (2, 8, 16)
-    assert torch.allclose(output.init_gate, torch.tanh(torch.tensor(0.05)))
+    assert output.init_gate.shape == (8,)
+    assert torch.allclose(output.init_gate, torch.full((8,), torch.tanh(torch.tensor(0.05)).item()))
     assert not torch.allclose(output.action_init, base_init)
     assert "slot_bias" not in dict(bridge.named_parameters())
+    assert bridge.config.init_gate_granularity == "per_step"
+    assert dict(bridge.named_parameters())["init_gate"].shape == (8,)
     assert bridge.config.bridge_mlp_dim == 1024
     assert bridge.bridge_mlp is not None
     assert torch.count_nonzero(bridge.bridge_mlp[-1].weight) == 0
@@ -52,6 +55,7 @@ def test_pair_bridge_fixed_gate_mode():
         num_heads=4,
         init_gate_mode="fixed",
         init_gate_value=0.1,
+        init_gate_granularity="scalar",
     )
     bridge = PairBridge(config)
     perception_tokens = torch.randn(2, 6, 64)
@@ -76,6 +80,29 @@ def test_pair_bridge_keeps_init_gate_fp32_after_bf16_cast():
     assert dict(bridge.named_parameters())["init_gate"].dtype == torch.float32
 
 
+def test_pair_bridge_per_step_gate_broadcasts_across_action_dims():
+    config = PairBridgeConfig(
+        llm_dim=64,
+        bridge_dim=32,
+        latent_dim=8,
+        horizon=8,
+        action_dim=7,
+        num_heads=4,
+        init_gate_value=0.2,
+        init_gate_granularity="per_step",
+    )
+    bridge = PairBridge(config)
+    perception_tokens = torch.randn(2, 6, 64)
+    base_init = torch.randn(2, 56, 64)
+
+    output = bridge(perception_tokens, base_init)
+
+    assert output.init_gate.shape == (8,)
+    delta_by_step = output.action_init_delta.reshape(2, 8, 7, 64)
+    expected = base_init + (output.init_gate.view(1, 8, 1, 1) * delta_by_step).reshape(2, 56, 64)
+    assert torch.allclose(output.action_init, expected)
+
+
 def test_pair_bridge_legacy_config_disables_mlp():
     config = PairBridgeConfig.from_dict(
         {
@@ -90,6 +117,7 @@ def test_pair_bridge_legacy_config_disables_mlp():
     bridge = PairBridge(config)
 
     assert bridge.config.bridge_mlp_dim == 0
+    assert bridge.config.init_gate_granularity == "scalar"
     assert bridge.bridge_mlp is None
 
 
