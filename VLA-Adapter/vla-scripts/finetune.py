@@ -561,9 +561,13 @@ def run_forward_pass(
                 pair_effective_delta_norm = (
                     pair_init_gate.abs().view(1, -1, 1, 1) * pair_delta.norm(dim=-1)
                 ).mean()
+            pair_init_gate_values = pair_init_gate.reshape(-1)
             pair_metrics = {
                 "pair/align_loss": pair_align_loss.item(),
-                "pair/init_gate": pair_init_gate.mean().item(),
+                "pair/init_gate": pair_init_gate_values.mean().item(),
+                "pair/init_gate_std": pair_init_gate_values.std(unbiased=False).item(),
+                "pair/init_gate_min": pair_init_gate_values.min().item(),
+                "pair/init_gate_max": pair_init_gate_values.max().item(),
             }
             if cfg.pair_log_debug_metrics:
                 pair_metrics.update(
@@ -1246,6 +1250,9 @@ def finetune(cfg: FinetuneConfig) -> None:
         "next_actions_l1_loss": deque(maxlen=cfg.grad_accumulation_steps),
         "pair/align_loss": deque(maxlen=cfg.grad_accumulation_steps),
         "pair/init_gate": deque(maxlen=cfg.grad_accumulation_steps),
+        "pair/init_gate_std": deque(maxlen=cfg.grad_accumulation_steps),
+        "pair/init_gate_min": deque(maxlen=cfg.grad_accumulation_steps),
+        "pair/init_gate_max": deque(maxlen=cfg.grad_accumulation_steps),
     }
     if cfg.pair_log_debug_metrics:
         recent_metrics.update(
