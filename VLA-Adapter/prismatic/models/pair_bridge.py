@@ -104,12 +104,19 @@ class PairBridge(nn.Module):
             nn.init.zeros_(self.bridge_mlp[-1].weight)
             nn.init.zeros_(self.bridge_mlp[-1].bias)
 
-    def keep_init_gate_fp32(self) -> None:
-        """Keep the scalar init gate in fp32 after bulk bf16 conversion."""
+    def keep_high_precision_params(self) -> None:
+        """Keep small scale/gate parameters in fp32 after bulk bf16 conversion."""
+        self.slot_scale = nn.Parameter(
+            self.slot_scale.detach().float(),
+            requires_grad=self.slot_scale.requires_grad,
+        )
         if isinstance(self.init_gate, nn.Parameter):
             self.init_gate = nn.Parameter(self.init_gate.detach().float(), requires_grad=self.init_gate.requires_grad)
         else:
             self.init_gate = self.init_gate.detach().float()
+
+    def keep_init_gate_fp32(self) -> None:
+        self.keep_high_precision_params()
 
     def forward(
         self,

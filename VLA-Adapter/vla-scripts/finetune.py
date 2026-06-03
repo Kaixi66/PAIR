@@ -1124,7 +1124,7 @@ def finetune(cfg: FinetuneConfig) -> None:
             {"config": pair_bridge_config},
             to_bf16=True,
             find_unused_params=True,
-            post_bf16_hook=lambda module: module.keep_init_gate_fp32(),
+            post_bf16_hook=lambda module: module.keep_high_precision_params(),
         )
         action_ae_encoder = load_frozen_action_encoder(cfg.pair_action_ae_encoder_path, device=device_id)
 
