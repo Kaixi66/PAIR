@@ -185,13 +185,6 @@ def cosine_alignment_loss(predicted: Tensor, target: Tensor) -> Tensor:
     return (1.0 - cosine).mean()
 
 
-def linear_warmup_weight(step: int, *, max_weight: float, max_steps: int, warmup_ratio: float) -> float:
-    if max_weight <= 0:
-        return 0.0
-    warmup_steps = max(1, int(max_steps * warmup_ratio))
-    return float(max_weight) * min(1.0, max(0.0, float(step) / float(warmup_steps)))
-
-
 def _unwrap(module: nn.Module) -> nn.Module:
     return module.module if hasattr(module, "module") else module
 

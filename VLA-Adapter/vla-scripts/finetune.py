@@ -65,7 +65,6 @@ try:
         PairBridge,
         PairBridgeConfig,
         cosine_alignment_loss,
-        linear_warmup_weight,
         load_frozen_action_encoder,
         save_pair_bridge_checkpoint,
     )
@@ -73,7 +72,6 @@ except ImportError:
     PairBridge = None
     PairBridgeConfig = None
     cosine_alignment_loss = None
-    linear_warmup_weight = None
     load_frozen_action_encoder = None
     save_pair_bridge_checkpoint = None
 
@@ -149,7 +147,6 @@ class FinetuneConfig:
     use_pair_bridge: bool = False
     pair_action_ae_encoder_path: str = "/umd-datapool/kaixi/PAIR/action_ae_runs/ae_libero_1/encoder.pt"
     pair_align_weight: float = 0.05
-    pair_align_warmup_ratio: float = 0.05
     pair_bridge_dim: int = 512
     pair_init_gate_mode: str = "learnable"
     pair_init_gate_value: float = 0.05
@@ -517,12 +514,7 @@ def run_forward_pass(
                 action_latents = action_ae_encoder(ground_truth_actions.float()).detach()
 
             pair_align_loss = cosine_alignment_loss(pair_output.z_align, action_latents)
-            pair_lambda = linear_warmup_weight(
-                pair_global_step,
-                max_weight=cfg.pair_align_weight,
-                max_steps=cfg.max_steps,
-                warmup_ratio=cfg.pair_align_warmup_ratio,
-            )
+            pair_lambda = float(cfg.pair_align_weight)
             pair_init_gate = pair_output.init_gate.detach().float()
             pair_module = pair_bridge.module if hasattr(pair_bridge, "module") else pair_bridge
             pair_init_gate_raw = pair_module.init_gate.detach().float()

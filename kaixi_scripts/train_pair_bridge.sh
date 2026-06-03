@@ -21,7 +21,6 @@ SAVE_LATEST_CHECKPOINT_ONLY="${SAVE_LATEST_CHECKPOINT_ONLY:-True}"
 USE_PRO_VERSION="${USE_PRO_VERSION:-False}"
 
 PAIR_ALIGN_WEIGHT="${PAIR_ALIGN_WEIGHT:-0.05}"
-PAIR_ALIGN_WARMUP_RATIO="${PAIR_ALIGN_WARMUP_RATIO:-0.05}"
 PAIR_BRIDGE_DIM="${PAIR_BRIDGE_DIM:-512}"
 
 PAIR_INIT_GATE_MODE="${PAIR_INIT_GATE_MODE:-learnable}"
@@ -157,7 +156,6 @@ cmd=(
     --use_pair_bridge True
     --pair_action_ae_encoder_path "${PAIR_ACTION_AE_ENCODER_PATH}"
     --pair_align_weight "${PAIR_ALIGN_WEIGHT}"
-    --pair_align_warmup_ratio "${PAIR_ALIGN_WARMUP_RATIO}"
     --pair_bridge_dim "${PAIR_BRIDGE_DIM}"
     --pair_init_gate_mode "${PAIR_INIT_GATE_MODE}"
     --pair_init_gate_value "${PAIR_INIT_GATE_VALUE}"
