@@ -100,9 +100,6 @@ class PairBridge(nn.Module):
 
     def reset_parameters(self) -> None:
         nn.init.normal_(self.bridge_queries, mean=0.0, std=0.02)
-        if self.bridge_mlp is not None:
-            nn.init.zeros_(self.bridge_mlp[-1].weight)
-            nn.init.zeros_(self.bridge_mlp[-1].bias)
 
     def keep_high_precision_params(self) -> None:
         """Keep small scale/gate parameters in fp32 after bulk bf16 conversion."""

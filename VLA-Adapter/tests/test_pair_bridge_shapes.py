@@ -28,7 +28,7 @@ def test_pair_bridge_shapes_and_gate_init(tmp_path: Path):
     assert dict(bridge.named_parameters())["init_gate"].shape == (8,)
     assert bridge.config.bridge_mlp_dim == 1024
     assert bridge.bridge_mlp is not None
-    assert torch.count_nonzero(bridge.bridge_mlp[-1].weight) == 0
+    assert torch.count_nonzero(bridge.bridge_mlp[-1].weight) > 0
 
     ckpt = tmp_path / "pair_bridge.pt"
     save_pair_bridge_checkpoint(
