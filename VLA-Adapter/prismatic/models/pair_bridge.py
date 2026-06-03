@@ -20,6 +20,7 @@ class PairBridgeConfig:
     action_dim: int = 7
     num_heads: int = 8
     dropout: float = 0.0
+    bridge_mlp_dim: int = 1024
     init_gate_mode: str = "learnable"
     init_gate_value: float = 0.05
 
@@ -29,7 +30,10 @@ class PairBridgeConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, object]) -> "PairBridgeConfig":
         allowed = set(cls.__dataclass_fields__.keys())
-        return cls(**{key: value for key, value in data.items() if key in allowed})
+        values = {key: value for key, value in data.items() if key in allowed}
+        if "bridge_mlp_dim" not in values:
+            values["bridge_mlp_dim"] = 0
+        return cls(**values)
 
 
 @dataclass(frozen=True)
@@ -56,6 +60,17 @@ class PairBridge(nn.Module):
             dropout=self.config.dropout,
             batch_first=True,
         )
+        if self.config.bridge_mlp_dim > 0:
+            self.bridge_mlp_norm = nn.LayerNorm(self.config.bridge_dim)
+            self.bridge_mlp = nn.Sequential(
+                nn.Linear(self.config.bridge_dim, self.config.bridge_mlp_dim, bias=True),
+                nn.GELU(),
+                nn.Dropout(self.config.dropout),
+                nn.Linear(self.config.bridge_mlp_dim, self.config.bridge_dim, bias=True),
+            )
+        else:
+            self.bridge_mlp_norm = None
+            self.bridge_mlp = None
         self.align_proj = nn.Linear(self.config.bridge_dim, self.config.latent_dim, bias=True)
         self.init_proj = nn.Linear(self.config.bridge_dim, self.config.llm_dim, bias=True)
 
@@ -74,6 +89,9 @@ class PairBridge(nn.Module):
 
     def reset_parameters(self) -> None:
         nn.init.normal_(self.bridge_queries, mean=0.0, std=0.02)
+        if self.bridge_mlp is not None:
+            nn.init.zeros_(self.bridge_mlp[-1].weight)
+            nn.init.zeros_(self.bridge_mlp[-1].bias)
 
     def keep_init_gate_fp32(self) -> None:
         """Keep the scalar init gate in fp32 after bulk bf16 conversion."""
@@ -119,6 +137,8 @@ class PairBridge(nn.Module):
             key_padding_mask=key_padding_mask,
             need_weights=False,
         )
+        if self.bridge_mlp is not None:
+            bridge_tokens = bridge_tokens + self.bridge_mlp(self.bridge_mlp_norm(bridge_tokens))
 
         z_align = self.align_proj(bridge_tokens)
         z_init = self.init_proj(bridge_tokens)

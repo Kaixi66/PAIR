@@ -23,6 +23,9 @@ def test_pair_bridge_shapes_and_gate_init(tmp_path: Path):
     assert torch.allclose(output.init_gate, torch.tanh(torch.tensor(0.05)))
     assert not torch.allclose(output.action_init, base_init)
     assert "slot_bias" not in dict(bridge.named_parameters())
+    assert bridge.config.bridge_mlp_dim == 1024
+    assert bridge.bridge_mlp is not None
+    assert torch.count_nonzero(bridge.bridge_mlp[-1].weight) == 0
 
     ckpt = tmp_path / "pair_bridge.pt"
     save_pair_bridge_checkpoint(
@@ -68,8 +71,26 @@ def test_pair_bridge_keeps_init_gate_fp32_after_bf16_cast():
     bridge.keep_init_gate_fp32()
 
     assert bridge.down_proj.weight.dtype == torch.bfloat16
+    assert bridge.bridge_mlp[0].weight.dtype == torch.bfloat16
     assert bridge.init_gate.dtype == torch.float32
     assert dict(bridge.named_parameters())["init_gate"].dtype == torch.float32
+
+
+def test_pair_bridge_legacy_config_disables_mlp():
+    config = PairBridgeConfig.from_dict(
+        {
+            "llm_dim": 64,
+            "bridge_dim": 32,
+            "latent_dim": 8,
+            "horizon": 8,
+            "action_dim": 7,
+            "num_heads": 4,
+        }
+    )
+    bridge = PairBridge(config)
+
+    assert bridge.config.bridge_mlp_dim == 0
+    assert bridge.bridge_mlp is None
 
 
 def test_pair_bridge_perception_mask():
