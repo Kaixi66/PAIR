@@ -219,7 +219,14 @@ def get_run_id(cfg) -> str:
 
 
 
-def load_checkpoint(module_name: str, path: str, step: int, device: str = "cpu") -> dict:
+def load_checkpoint(
+    module_name: str,
+    path: str,
+    step: int,
+    device: str = "cpu",
+    *,
+    is_main_process: bool = True,
+) -> dict:
     """
     Loads a checkpoint for a given module.
 
@@ -233,7 +240,8 @@ def load_checkpoint(module_name: str, path: str, step: int, device: str = "cpu")
         dict: PyTorch model state dictionary.
     """
     checkpoint_path = os.path.join(path, f"{module_name}--{step}_checkpoint.pt")
-    print(f"Loading checkpoint: {checkpoint_path}")
+    if is_main_process:
+        print(f"Loading checkpoint: {checkpoint_path}")
     state_dict = torch.load(checkpoint_path, weights_only=True, map_location=device)
     return remove_ddp_in_checkpoint(state_dict)
 
@@ -255,7 +263,7 @@ def wrap_ddp(module: nn.Module, device_id: int, find_unused: bool = False) -> DD
 
 
 
-def count_parameters(module: nn.Module, name: str) -> None:
+def count_parameters(module: nn.Module, name: str, *, is_main_process: bool = True) -> None:
     """
     Counts and prints the number of trainable parameters in a module.
 
@@ -267,8 +275,9 @@ def count_parameters(module: nn.Module, name: str) -> None:
         None.
     """
     num_params = sum(p.numel() for p in module.parameters() if p.requires_grad)
-    
-    print(f"# trainable params in {name}: {num_params}")
+
+    if is_main_process:
+        print(f"# trainable params in {name}: {num_params}")
 
 
 
@@ -281,6 +290,7 @@ def init_module(
     to_bf16: bool = False,
     find_unused_params: bool = False,
     post_bf16_hook: Optional[Callable[[nn.Module], None]] = None,
+    is_main_process: bool = True,
 ) -> DDP:
     """
     Initializes a module, optionally loads checkpoint, moves to device, and wraps with DDP.
@@ -298,12 +308,18 @@ def init_module(
         DistributedDataParallel: PyTorch module wrapped with DDP.
     """
     module = module_class(**module_args)
-    count_parameters(module, module_name)
+    count_parameters(module, module_name, is_main_process=is_main_process)
 
     if cfg.resume:
-        state_dict = load_checkpoint(module_name, cfg.resum_vla_path, cfg.resume_step)
+        state_dict = load_checkpoint(
+            module_name,
+            cfg.resum_vla_path,
+            cfg.resume_step,
+            is_main_process=is_main_process,
+        )
         module.load_state_dict(state_dict)
-        print('loaded!!!!!!!!!')
+        if is_main_process:
+            print('loaded!!!!!!!!!')
 
     if to_bf16:
         module = module.to(torch.bfloat16)
@@ -909,9 +925,16 @@ def finetune(cfg: FinetuneConfig) -> None:
         "Cannot do both L1 regression and diffusion. Please pick one of them!"
     )
 
+    # GPU setup
+    distributed_state = PartialState()
+    device_id = distributed_state.local_process_index
+    torch.cuda.set_device(device_id)
+    torch.cuda.empty_cache()
+
     # Trim trailing forward slash ('/') in VLA path if it exists
     cfg.config_file_path = cfg.config_file_path.rstrip("/")
-    print(f"Fine-tuning OpenVLA Model `{cfg.config_file_path}` on `{cfg.dataset_name}`")
+    if distributed_state.is_main_process:
+        print(f"Fine-tuning OpenVLA Model `{cfg.config_file_path}` on `{cfg.dataset_name}`")
 
     # Get experiment run ID
     run_id = get_run_id(cfg)
@@ -920,24 +943,19 @@ def finetune(cfg: FinetuneConfig) -> None:
     run_dir = cfg.run_root_dir / run_id
     os.makedirs(run_dir, exist_ok=True)
 
-    # GPU setup
-    distributed_state = PartialState()
-    device_id = distributed_state.local_process_index
-    torch.cuda.set_device(device_id)
-    torch.cuda.empty_cache()
-
     # Initialize wandb logging
     if distributed_state.is_main_process:
         wandb.init(entity=cfg.wandb_entity, project=cfg.wandb_project, name=run_id)
 
     # Print detected constants
-    print(
-        "Detected constants:\n"
-        f"\tNUM_ACTIONS_CHUNK: {NUM_ACTIONS_CHUNK}\n"
-        f"\tACTION_DIM: {ACTION_DIM}\n"
-        f"\tPROPRIO_DIM: {PROPRIO_DIM}\n"
-        f"\tACTION_PROPRIO_NORMALIZATION_TYPE: {ACTION_PROPRIO_NORMALIZATION_TYPE}"
-    )
+    if distributed_state.is_main_process:
+        print(
+            "Detected constants:\n"
+            f"\tNUM_ACTIONS_CHUNK: {NUM_ACTIONS_CHUNK}\n"
+            f"\tACTION_DIM: {ACTION_DIM}\n"
+            f"\tPROPRIO_DIM: {PROPRIO_DIM}\n"
+            f"\tACTION_PROPRIO_NORMALIZATION_TYPE: {ACTION_PROPRIO_NORMALIZATION_TYPE}"
+        )
 
     # Two options:
     # (1) Base model is on Hugging Face Hub
@@ -1050,7 +1068,11 @@ def finetune(cfg: FinetuneConfig) -> None:
 
     # FiLM setup
     if cfg.use_film:
-        count_parameters(vla.vision_backbone, "vla.vision_backbone (original)")
+        count_parameters(
+            vla.vision_backbone,
+            "vla.vision_backbone (original)",
+            is_main_process=distributed_state.is_main_process,
+        )
         # Wrap vision backbone with FiLM wrapper
         # Important: For this, must specify `vla.model.vision_backbone` instead of just `vla.vision_backbone`, since the
         # latter would cause the new wrapped backbone to be saved as a new attribute of `vla` instead of overwriting the
@@ -1059,9 +1081,18 @@ def finetune(cfg: FinetuneConfig) -> None:
             vision_backbone=vla.model.vision_backbone,
             llm_dim=vla.llm_dim,
         )
-        count_parameters(vla.vision_backbone, "vla.vision_backbone (post-wrap)")
+        count_parameters(
+            vla.vision_backbone,
+            "vla.vision_backbone (post-wrap)",
+            is_main_process=distributed_state.is_main_process,
+        )
         if cfg.resume:
-            state_dict = load_checkpoint("vision_backbone", cfg.config_file_path, cfg.resume_step)
+            state_dict = load_checkpoint(
+                "vision_backbone",
+                cfg.config_file_path,
+                cfg.resume_step,
+                is_main_process=distributed_state.is_main_process,
+            )
             vla.model.vision_backbone.load_state_dict(state_dict)
         vla.model.vision_backbone = vla.model.vision_backbone.to(device_id)
 
@@ -1077,6 +1108,7 @@ def finetune(cfg: FinetuneConfig) -> None:
             device_id,
             {"llm_dim": vla.module.llm_dim, "proprio_dim": PROPRIO_DIM},
             to_bf16=True,
+            is_main_process=distributed_state.is_main_process,
         )
 
     # If applicable, instantiate continuous action head for L1 regression
@@ -1093,6 +1125,7 @@ def finetune(cfg: FinetuneConfig) -> None:
             "use_pro_version": cfg.use_pro_version,
             },
         to_bf16=True,
+        is_main_process=distributed_state.is_main_process,
         )
 
     pair_bridge = None
@@ -1121,6 +1154,7 @@ def finetune(cfg: FinetuneConfig) -> None:
             to_bf16=True,
             find_unused_params=True,
             post_bf16_hook=lambda module: module.keep_high_precision_params(),
+            is_main_process=distributed_state.is_main_process,
         )
         action_ae_encoder = load_frozen_action_encoder(cfg.pair_action_ae_encoder_path, device=device_id)
 
@@ -1137,7 +1171,8 @@ def finetune(cfg: FinetuneConfig) -> None:
         trainable_params += [param for param in proprio_projector.parameters() if param.requires_grad]
     if cfg.use_pair_bridge:
         trainable_params += [param for param in pair_bridge.parameters() if param.requires_grad]
-    print(f"# total trainable params: {sum(p.numel() for p in trainable_params)}")
+    if distributed_state.is_main_process:
+        print(f"# total trainable params: {sum(p.numel() for p in trainable_params)}")
     optimizer = AdamW(trainable_params, lr=cfg.learning_rate)
 
     # Record original learning rate
@@ -1223,7 +1258,8 @@ def finetune(cfg: FinetuneConfig) -> None:
         collate_fn=collator,
         num_workers=0,  # Important: Set to 0 if using RLDS, which uses its own parallelism
     )
-    print('Len of dataloader: ', len(dataloader))
+    if distributed_state.is_main_process:
+        print('Len of dataloader: ', len(dataloader))
     if cfg.use_val_set:
         val_batch_size = cfg.batch_size
         val_dataloader = DataLoader(
@@ -1260,7 +1296,11 @@ def finetune(cfg: FinetuneConfig) -> None:
         )
 
     # Start training
-    with tqdm.tqdm(total=cfg.max_steps, leave=False) as progress:
+    with tqdm.tqdm(
+        total=cfg.max_steps,
+        leave=False,
+        disable=not distributed_state.is_main_process,
+    ) as progress:
         vla.train()
         optimizer.zero_grad()
         for batch_idx, batch in enumerate(dataloader):
@@ -1269,7 +1309,10 @@ def finetune(cfg: FinetuneConfig) -> None:
             log_step = gradient_step_idx if not cfg.resume else cfg.resume_step + gradient_step_idx
 
             # Compute training metrics and loss
-            compute_diffusion_l1 = (cfg.use_l1_regression and batch_idx % cfg.diffusion_sample_freq == 0) or (cfg.use_diffusion and batch_idx % cfg.diffusion_sample_freq == 0)
+            compute_diffusion_l1 = distributed_state.is_main_process and (
+                (cfg.use_l1_regression and batch_idx % cfg.diffusion_sample_freq == 0)
+                or (cfg.use_diffusion and batch_idx % cfg.diffusion_sample_freq == 0)
+            )
             loss, metrics = run_forward_pass(
                 vla=vla,
                 action_head=action_head,
@@ -1371,7 +1414,8 @@ def finetune(cfg: FinetuneConfig) -> None:
 
             # Stop training when max_steps is reached
             if log_step == cfg.max_steps:
-                print(f"Max step {cfg.max_steps} reached! Stopping training...")
+                if distributed_state.is_main_process:
+                    print(f"Max step {cfg.max_steps} reached! Stopping training...")
                 break
 
 
