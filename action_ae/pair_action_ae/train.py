@@ -488,7 +488,7 @@ def train_v2(
     text_config = getattr(vla.config, "text_config", None)
     perception_dim = int(getattr(vla, "llm_dim", getattr(text_config, "hidden_size", 896)))
     model_cfg["perception_dim"] = perception_dim
-    model_cfg.setdefault("latent_dim", 8)
+    model_cfg.setdefault("latent_dim", 16)
     model_cfg.setdefault("mask_prob", 0.3)
     model_cfg.setdefault("noise_std", 0.05)
 

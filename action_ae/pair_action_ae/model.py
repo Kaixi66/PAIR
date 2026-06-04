@@ -41,13 +41,14 @@ class ActionPerceptionAEConfig:
     horizon: int = 8
     action_dim: int = 7
     hidden_dim: int = 64
-    latent_dim: int = 8
+    latent_dim: int = 16
     perception_dim: int = 896
-    encoder_layers: int = 4
+    encoder_layers: int = 2
     decoder_layers: int = 2
     num_heads: int = 4
     ffn_dim: int = 256
     perception_heads: int = 4
+    perception_layers: int = 2
     dropout: float = 0.0
     activation: str = "gelu"
     norm_first: bool = True
@@ -211,6 +212,47 @@ def corrupt_actions(
     return corrupted, mask
 
 
+class PerceptionCrossAttentionBlock(nn.Module):
+    """Cross-attends action hidden states to perception memory, then applies an MLP."""
+
+    def __init__(
+        self,
+        *,
+        hidden_dim: int,
+        num_heads: int,
+        ffn_dim: int,
+        dropout: float,
+    ) -> None:
+        super().__init__()
+        self.query_norm = nn.LayerNorm(hidden_dim)
+        self.memory_norm = nn.LayerNorm(hidden_dim)
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=hidden_dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.mlp_norm = nn.LayerNorm(hidden_dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_dim, ffn_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(ffn_dim, hidden_dim),
+        )
+
+    def forward(self, x: Tensor, memory: Tensor, key_padding_mask: Optional[Tensor]) -> Tensor:
+        memory = self.memory_norm(memory)
+        attended, _ = self.cross_attn(
+            query=self.query_norm(x),
+            key=memory,
+            value=memory,
+            key_padding_mask=key_padding_mask,
+            need_weights=False,
+        )
+        x = x + attended
+        return x + self.mlp(self.mlp_norm(x))
+
+
 class ActionPerceptionEncoder(nn.Module):
     """Maps actions plus `[V0;T0]` perception tokens to `[B,H,latent_dim]`."""
 
@@ -219,6 +261,8 @@ class ActionPerceptionEncoder(nn.Module):
         self.config = config
         self.requires_perception = True
         self.latent_dim = config.latent_dim
+        if config.perception_layers < 1:
+            raise ValueError("ActionPerceptionAEConfig.perception_layers must be >= 1")
         self.input_proj = nn.Linear(config.action_dim, config.hidden_dim)
         self.pos_embed = nn.Parameter(torch.zeros(1, config.horizon, config.hidden_dim))
         self.blocks = _make_transformer_stack(
@@ -231,20 +275,16 @@ class ActionPerceptionEncoder(nn.Module):
             norm_first=config.norm_first,
         )
         self.perception_proj = nn.Linear(config.perception_dim, config.hidden_dim)
-        self.cross_attn_norm = nn.LayerNorm(config.hidden_dim)
-        self.perception_norm = nn.LayerNorm(config.hidden_dim)
-        self.cross_attn = nn.MultiheadAttention(
-            embed_dim=config.hidden_dim,
-            num_heads=config.perception_heads,
-            dropout=config.dropout,
-            batch_first=True,
-        )
-        self.fuse_norm = nn.LayerNorm(config.hidden_dim)
-        self.fuse_mlp = nn.Sequential(
-            nn.Linear(config.hidden_dim, config.ffn_dim),
-            nn.GELU(),
-            nn.Dropout(config.dropout),
-            nn.Linear(config.ffn_dim, config.hidden_dim),
+        self.cross_blocks = nn.ModuleList(
+            [
+                PerceptionCrossAttentionBlock(
+                    hidden_dim=config.hidden_dim,
+                    num_heads=config.perception_heads,
+                    ffn_dim=config.ffn_dim,
+                    dropout=config.dropout,
+                )
+                for _ in range(config.perception_layers)
+            ]
         )
         self.latent_proj = nn.Linear(config.hidden_dim, config.latent_dim)
         self.reset_parameters()
@@ -281,17 +321,10 @@ class ActionPerceptionEncoder(nn.Module):
         x = x + self.pos_embed.to(dtype=x.dtype)
         x = self.blocks(x)
 
-        memory = self.perception_norm(self.perception_proj(perception_tokens.float()))
+        memory = self.perception_proj(perception_tokens.float())
         key_padding_mask = None if perception_mask is None else ~perception_mask.bool()
-        attended, _ = self.cross_attn(
-            query=self.cross_attn_norm(x),
-            key=memory,
-            value=memory,
-            key_padding_mask=key_padding_mask,
-            need_weights=False,
-        )
-        x = x + attended
-        x = x + self.fuse_mlp(self.fuse_norm(x))
+        for block in self.cross_blocks:
+            x = block(x, memory, key_padding_mask)
         return self.latent_proj(x)
 
 

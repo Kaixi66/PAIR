@@ -34,7 +34,7 @@ The saved `encoder.pt` is the Stage 2 teacher artifact. It contains an
 actions cross-attended to frozen VLA perception tokens:
 
 ```text
-actions [B, 8, 7] + perception [B, N, D] -> encoder -> [B, 8, 8] -> decoder -> [B, 8, 7]
+actions [B, 8, 7] + perception [B, N, D] -> encoder -> [B, 8, 16] -> decoder -> [B, 8, 7]
 ```
 
 Its `encoder.pt` metadata sets `requires_perception=true`, so PAIR Stage 2 can

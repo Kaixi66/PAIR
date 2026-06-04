@@ -98,17 +98,50 @@ def save_encoder_checkpoint(
     )
 
 
+def _migrate_legacy_perception_encoder_state(
+    config_dict: Dict[str, Any],
+    state_dict: Dict[str, torch.Tensor],
+) -> tuple[Dict[str, Any], Dict[str, torch.Tensor]]:
+    """Map the original single-cross-attn v2 encoder keys to cross_blocks.0."""
+    if not any(key.startswith("cross_attn.") for key in state_dict):
+        return config_dict, state_dict
+
+    migrated_config = dict(config_dict)
+    migrated_config.setdefault("perception_layers", 1)
+    prefix_map = {
+        "cross_attn_norm.": "cross_blocks.0.query_norm.",
+        "perception_norm.": "cross_blocks.0.memory_norm.",
+        "cross_attn.": "cross_blocks.0.cross_attn.",
+        "fuse_norm.": "cross_blocks.0.mlp_norm.",
+        "fuse_mlp.": "cross_blocks.0.mlp.",
+    }
+    migrated_state: Dict[str, torch.Tensor] = {}
+    for key, value in state_dict.items():
+        new_key = key
+        for old_prefix, new_prefix in prefix_map.items():
+            if key.startswith(old_prefix):
+                new_key = new_prefix + key[len(old_prefix) :]
+                break
+        migrated_state[new_key] = value
+    return migrated_config, migrated_state
+
+
 def load_encoder_checkpoint(path: str | Path, map_location: str | torch.device = "cpu") -> ActionEncoder:
     payload = torch.load(path, map_location=map_location)
     model_type = payload.get("model_type", "ActionEncoder")
     if model_type == "ActionPerceptionEncoder":
-        config = ActionPerceptionAEConfig.from_dict(payload["model_config"])
+        config_dict, state_dict = _migrate_legacy_perception_encoder_state(
+            dict(payload["model_config"]),
+            payload["state_dict"],
+        )
+        config = ActionPerceptionAEConfig.from_dict(config_dict)
         encoder = ActionPerceptionEncoder(config)
     elif model_type == "ActionEncoder":
         config = ActionAEConfig.from_dict(payload["model_config"])
         encoder = ActionEncoder(config)
+        state_dict = payload["state_dict"]
     else:
         raise ValueError(f"Unsupported action encoder checkpoint model_type={model_type!r}")
-    encoder.load_state_dict(payload["state_dict"])
+    encoder.load_state_dict(state_dict)
     encoder.eval()
     return encoder
