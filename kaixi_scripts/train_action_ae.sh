@@ -12,15 +12,10 @@ set -euo pipefail
 AE_VERSION="${AE_VERSION:-v1}"  # v1/action_only or v2/conditioned
 GPUS="${GPUS:-0}"
 
-BATCH_SIZE="${BATCH_SIZE:-auto}"
-BATCH_SIZE_V1="${BATCH_SIZE_V1:-1024}"
-BATCH_SIZE_V2="${BATCH_SIZE_V2:-8}"
-MAX_STEPS="${MAX_STEPS:-auto}"
-MAX_STEPS_V1="${MAX_STEPS_V1:-100000}"
-MAX_STEPS_V2="${MAX_STEPS_V2:-50000}"
+BATCH_SIZE="${BATCH_SIZE:-8}"
+MAX_STEPS="${MAX_STEPS:-50000}"
 
 LEARNING_RATE="${LEARNING_RATE:-3e-4}"
-WEIGHT_DECAY="${WEIGHT_DECAY:-1e-4}"
 LOG_EVERY="${LOG_EVERY:-100}"
 EVAL_EVERY="${EVAL_EVERY:-2000}"
 SAVE_EVERY="${SAVE_EVERY:-50000}"
@@ -28,8 +23,7 @@ EVAL_BATCHES="${EVAL_BATCHES:-20}"
 SEED="${SEED:-7}"
 LATENT_DIM="${LATENT_DIM:-}"
 
-# v2-only perception/corruption settings.
-# MASK_PROB is the probability of masking one action step in the 8-step chunk.
+# Corruption settings. MASK_PROB is the probability of masking one action step in the 8-step chunk.
 MASK_PROB="${MASK_PROB:-0.3}"
 NOISE_STD="${NOISE_STD:-0.05}"
 NUM_IMAGES_IN_INPUT="${NUM_IMAGES_IN_INPUT:-2}"
@@ -83,22 +77,6 @@ case "${AE_VERSION}" in
         ;;
 esac
 
-if [[ "${BATCH_SIZE}" == "auto" ]]; then
-    if [[ "${AE_VERSION}" == "v2" ]]; then
-        BATCH_SIZE="${BATCH_SIZE_V2}"
-    else
-        BATCH_SIZE="${BATCH_SIZE_V1}"
-    fi
-fi
-
-if [[ "${MAX_STEPS}" == "auto" ]]; then
-    if [[ "${AE_VERSION}" == "v2" ]]; then
-        MAX_STEPS="${MAX_STEPS_V2}"
-    else
-        MAX_STEPS="${MAX_STEPS_V1}"
-    fi
-fi
-
 if [[ "${CONFIG_PATH}" == "auto" ]]; then
     if [[ "${AE_VERSION}" == "v2" ]]; then
         CONFIG_PATH="${ACTION_AE_DIR}/configs/libero_all_v2_perception.yaml"
@@ -146,7 +124,6 @@ cmd=(
     --batch_size "${BATCH_SIZE}"
     --max_steps "${MAX_STEPS}"
     --learning_rate "${LEARNING_RATE}"
-    --weight_decay "${WEIGHT_DECAY}"
     --log_every "${LOG_EVERY}"
     --eval_every "${EVAL_EVERY}"
     --save_every "${SAVE_EVERY}"
