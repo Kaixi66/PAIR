@@ -8,9 +8,22 @@ set -euo pipefail
 # User-facing settings
 #########################
 
+AE_VERSION="${AE_VERSION:-v1}"
 GPUS="${GPUS:-0}"
-BATCH_SIZE="${BATCH_SIZE:-1024}"
-MAX_STEPS="${MAX_STEPS:-100000}"
+if [[ -z "${BATCH_SIZE:-}" ]]; then
+    if [[ "${AE_VERSION}" == "v2" ]]; then
+        BATCH_SIZE="8"
+    else
+        BATCH_SIZE="1024"
+    fi
+fi
+if [[ -z "${MAX_STEPS:-}" ]]; then
+    if [[ "${AE_VERSION}" == "v2" ]]; then
+        MAX_STEPS="50000"
+    else
+        MAX_STEPS="100000"
+    fi
+fi
 LEARNING_RATE="${LEARNING_RATE:-3e-4}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-1e-4}"
 LOG_EVERY="${LOG_EVERY:-100}"
@@ -18,12 +31,14 @@ EVAL_EVERY="${EVAL_EVERY:-2000}"
 SAVE_EVERY="${SAVE_EVERY:-50000}"
 EVAL_BATCHES="${EVAL_BATCHES:-20}"
 SEED="${SEED:-7}"
+MASK_PROB="${MASK_PROB:-0.3}"
+NOISE_STD="${NOISE_STD:-0.05}"
+NUM_IMAGES_IN_INPUT="${NUM_IMAGES_IN_INPUT:-2}"
 
 WANDB_ENTITY="${WANDB_ENTITY:-kaixi-university-of-maryland}"
 WANDB_PROJECT="${WANDB_PROJECT:-PAIR}"
 export WANDB_MODE="${WANDB_MODE:-online}"
 
-EXP_NAME="${EXP_NAME:-ae_libero_1}"
 DRY_RUN="${DRY_RUN:-false}"
 BACKGROUND="${BACKGROUND:-false}"
 
@@ -38,15 +53,27 @@ PAIR_ROOT="${PAIR_ROOT:-/data/kaixi/PAIR}"
 ENV_SH="${ENV_SH:-${PAIR_ROOT}/kaixi_scripts/env.sh}"
 ACTION_AE_DIR="${ACTION_AE_DIR:-${PAIR_ROOT}/action_ae}"
 VLA_ADAPTER_DIR="${VLA_ADAPTER_DIR:-${PAIR_ROOT}/VLA-Adapter}"
-CONFIG_PATH="${CONFIG_PATH:-${ACTION_AE_DIR}/configs/libero_all.yaml}"
+if [[ -z "${CONFIG_PATH:-}" ]]; then
+    if [[ "${AE_VERSION}" == "v2" ]]; then
+        CONFIG_PATH="${ACTION_AE_DIR}/configs/libero_all_v2_perception.yaml"
+    else
+        CONFIG_PATH="${ACTION_AE_DIR}/configs/libero_all.yaml"
+    fi
+fi
 DATA_ROOT_DIR="${DATA_ROOT_DIR:-/data/kaixi/dataset/libero}"
 RUN_ROOT_DIR="${RUN_ROOT_DIR:-/umd-datapool/kaixi/PAIR/action_ae_runs}"
 LOG_DIR="${LOG_DIR:-${ACTION_AE_DIR}/logs}"
+VLA_PATH="${VLA_PATH:-${VLA_ADAPTER_DIR}/pretrained_models/prism-qwen25-extra-dinosiglip-224px-0_5b}"
+VLA_CONFIG_FILE_PATH="${VLA_CONFIG_FILE_PATH:-${VLA_ADAPTER_DIR}/pretrained_models/configs}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 current_time="${CURRENT_TIME:-$(date +%Y%m%d_%H%M%S)}"
-if [[ -z "${EXP_NAME}" ]]; then
-    EXP_NAME="action_ae_libero_all_${current_time}"
+if [[ -z "${EXP_NAME:-}" ]]; then
+    if [[ "${AE_VERSION}" == "v2" ]]; then
+        EXP_NAME="ae_v2_perception_libero_all_${current_time}"
+    else
+        EXP_NAME="ae_libero_1"
+    fi
 fi
 log_file="${LOG_FILE:-${LOG_DIR}/ActionAE--${EXP_NAME}.log}"
 
@@ -85,10 +112,16 @@ cmd=(
     --save_every "${SAVE_EVERY}"
     --eval_batches "${EVAL_BATCHES}"
     --seed "${SEED}"
-    --wandb_entity "${WANDB_ENTITY}"
-    --wandb_project "${WANDB_PROJECT}"
-    --wandb_mode "${WANDB_MODE}"
-)
+	    --wandb_entity "${WANDB_ENTITY}"
+	    --wandb_project "${WANDB_PROJECT}"
+	    --wandb_mode "${WANDB_MODE}"
+	    --ae_version "${AE_VERSION}"
+	    --vlm_path "${VLA_PATH}"
+	    --vla_config_file_path "${VLA_CONFIG_FILE_PATH}"
+	    --num_images_in_input "${NUM_IMAGES_IN_INPUT}"
+	    --mask_prob "${MASK_PROB}"
+	    --noise_std "${NOISE_STD}"
+	)
 
 if [[ -n "${EXTRA_ARGS}" ]]; then
     # shellcheck disable=SC2206
@@ -98,11 +131,16 @@ fi
 
 cat <<EOF
 [train_action_ae] config: ${CONFIG_PATH}
+[train_action_ae] ae_version: ${AE_VERSION}
 [train_action_ae] data_root: ${DATA_ROOT_DIR}
 [train_action_ae] gpus: ${CUDA_VISIBLE_DEVICES}
 [train_action_ae] batch_size: ${BATCH_SIZE}
 [train_action_ae] max_steps: ${MAX_STEPS}
 [train_action_ae] learning_rate: ${LEARNING_RATE}
+[train_action_ae] mask_prob: ${MASK_PROB}
+[train_action_ae] noise_std: ${NOISE_STD}
+[train_action_ae] vla_path: ${VLA_PATH}
+[train_action_ae] vla_config_file_path: ${VLA_CONFIG_FILE_PATH}
 [train_action_ae] wandb: ${WANDB_ENTITY}/${WANDB_PROJECT} (${WANDB_MODE})
 [train_action_ae] exp_name: ${EXP_NAME}
 [train_action_ae] run_root: ${RUN_ROOT_DIR}

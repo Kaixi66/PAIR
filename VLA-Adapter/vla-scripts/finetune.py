@@ -527,7 +527,14 @@ def run_forward_pass(
             initial_action_states = pair_output.action_init_delta
             initial_action_gate = pair_output.init_gate
             with torch.no_grad():
-                action_latents = action_ae_encoder(ground_truth_actions.float()).detach()
+                if getattr(action_ae_encoder, "requires_perception", False):
+                    action_latents = action_ae_encoder(
+                        ground_truth_actions.float(),
+                        perception_tokens,
+                        perception_mask,
+                    ).detach()
+                else:
+                    action_latents = action_ae_encoder(ground_truth_actions.float()).detach()
 
             pair_align_loss = cosine_alignment_loss(pair_output.z_align, action_latents)
             pair_lambda = float(cfg.pair_align_weight)
@@ -1134,11 +1141,13 @@ def finetune(cfg: FinetuneConfig) -> None:
         require_pair_bridge_imports()
         if not Path(cfg.pair_action_ae_encoder_path).exists():
             raise FileNotFoundError(f"PAIR Action AE encoder not found: {cfg.pair_action_ae_encoder_path}")
+        action_ae_encoder = load_frozen_action_encoder(cfg.pair_action_ae_encoder_path, device=device_id)
+        pair_latent_dim = int(getattr(action_ae_encoder, "latent_dim", 16))
 
         pair_bridge_config = PairBridgeConfig(
             llm_dim=vla.module.llm_dim,
             bridge_dim=cfg.pair_bridge_dim,
-            latent_dim=16,
+            latent_dim=pair_latent_dim,
             horizon=NUM_ACTIONS_CHUNK,
             action_dim=ACTION_DIM,
             init_gate_mode=cfg.pair_init_gate_mode,
@@ -1156,7 +1165,6 @@ def finetune(cfg: FinetuneConfig) -> None:
             post_bf16_hook=lambda module: module.keep_high_precision_params(),
             is_main_process=distributed_state.is_main_process,
         )
-        action_ae_encoder = load_frozen_action_encoder(cfg.pair_action_ae_encoder_path, device=device_id)
 
     # Get number of vision patches
     NUM_PATCHES = vla.module.vision_backbone.get_num_patches() * vla.module.vision_backbone.get_num_images_in_input()

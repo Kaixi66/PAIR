@@ -1,0 +1,53 @@
+run:
+  run_root_dir: /umd-datapool/kaixi/PAIR/action_ae_runs
+  run_name: null
+
+data:
+  data_root_dir: /data/kaixi/dataset/libero
+  mixture: libero_4_task_suites_no_noops
+  shuffle_buffer_size: 100000
+  image_aug: true
+  eval_uses_train_split: true
+
+vla:
+  vlm_path: /data/kaixi/PAIR/VLA-Adapter/pretrained_models/prism-qwen25-extra-dinosiglip-224px-0_5b
+  config_file_path: /data/kaixi/PAIR/VLA-Adapter/pretrained_models/configs
+  use_minivlm: true
+  num_images_in_input: 2
+
+model:
+  ae_version: v2
+  horizon: 8
+  action_dim: 7
+  hidden_dim: 64
+  latent_dim: 8
+  perception_dim: 896
+  encoder_layers: 4
+  decoder_layers: 2
+  num_heads: 4
+  ffn_dim: 256
+  perception_heads: 4
+  dropout: 0.0
+  activation: gelu
+  norm_first: true
+  mask_prob: 0.3
+  noise_std: 0.05
+
+training:
+  batch_size: 8
+  max_steps: 50000
+  learning_rate: 3.0e-4
+  weight_decay: 1.0e-4
+  warmup_steps: 1000
+  grad_clip_norm: 1.0
+  log_every: 100
+  eval_every: 2000
+  save_every: 10000
+  eval_batches: 20
+  seed: 7
+  device: null
+
+wandb:
+  mode: online
+  entity: kaixi-university-of-maryland
+  project: PAIR

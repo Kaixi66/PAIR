@@ -9,7 +9,7 @@ from typing import Any, Dict
 import numpy as np
 import torch
 
-from .model import ActionAEConfig, ActionEncoder
+from .model import ActionAEConfig, ActionEncoder, ActionPerceptionAEConfig, ActionPerceptionEncoder
 
 
 def to_jsonable(value: Any) -> Any:
@@ -66,21 +66,33 @@ def save_training_checkpoint(
     )
 
 
+def _encoder_config_to_dict(config: Any) -> Dict[str, object]:
+    if hasattr(config, "to_dict"):
+        return config.to_dict()
+    if isinstance(config, dict):
+        return dict(config)
+    raise TypeError(f"Unsupported encoder config type: {type(config).__name__}")
+
+
 def save_encoder_checkpoint(
     *,
     path: str | Path,
-    encoder: ActionEncoder,
-    config: ActionAEConfig,
+    encoder: torch.nn.Module,
+    config: Any,
     metadata: Dict[str, Any] | None = None,
 ) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    model_type = "ActionPerceptionEncoder" if getattr(encoder, "requires_perception", False) else "ActionEncoder"
+    payload_metadata = dict(metadata or {})
+    payload_metadata.setdefault("requires_perception", bool(getattr(encoder, "requires_perception", False)))
+    payload_metadata.setdefault("latent_dim", int(getattr(encoder, "latent_dim", getattr(config, "latent_dim", 0))))
     torch.save(
         {
-            "model_type": "ActionEncoder",
-            "model_config": config.to_dict(),
+            "model_type": model_type,
+            "model_config": _encoder_config_to_dict(config),
             "state_dict": encoder.state_dict(),
-            "metadata": to_jsonable(metadata or {}),
+            "metadata": to_jsonable(payload_metadata),
         },
         path,
     )
@@ -88,8 +100,15 @@ def save_encoder_checkpoint(
 
 def load_encoder_checkpoint(path: str | Path, map_location: str | torch.device = "cpu") -> ActionEncoder:
     payload = torch.load(path, map_location=map_location)
-    config = ActionAEConfig.from_dict(payload["model_config"])
-    encoder = ActionEncoder(config)
+    model_type = payload.get("model_type", "ActionEncoder")
+    if model_type == "ActionPerceptionEncoder":
+        config = ActionPerceptionAEConfig.from_dict(payload["model_config"])
+        encoder = ActionPerceptionEncoder(config)
+    elif model_type == "ActionEncoder":
+        config = ActionAEConfig.from_dict(payload["model_config"])
+        encoder = ActionEncoder(config)
+    else:
+        raise ValueError(f"Unsupported action encoder checkpoint model_type={model_type!r}")
     encoder.load_state_dict(payload["state_dict"])
     encoder.eval()
     return encoder

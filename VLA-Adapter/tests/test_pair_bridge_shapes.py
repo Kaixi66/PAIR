@@ -159,3 +159,14 @@ def test_pair_bridge_perception_mask():
 
     assert output.action_init.shape == (2, 56, 64)
     assert output.z_align.shape == (2, 8, 8)
+
+
+def test_pair_bridge_respects_configured_latent_dim():
+    config = PairBridgeConfig(llm_dim=64, bridge_dim=32, latent_dim=8, horizon=8, action_dim=7, num_heads=4)
+    bridge = PairBridge(config)
+    perception_tokens = torch.randn(2, 6, 64)
+    base_init = torch.zeros(2, 56, 64)
+
+    output = bridge(perception_tokens, base_init)
+
+    assert output.z_align.shape == (2, 8, 8)
