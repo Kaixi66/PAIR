@@ -1,21 +1,74 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# PAIR Action AE training launcher.
-#
-# Common examples:
+# PAIR Action AE training launcher. Override values at launch, for example:
 #   MAX_STEPS=2 BATCH_SIZE=4 WANDB_MODE=disabled ./train_action_ae.sh
-#   AE_VERSION=conditioned MAX_STEPS=2 BATCH_SIZE=1 WANDB_MODE=disabled ./train_action_ae.sh
-#   AE_VERSION=v2 LATENT_DIM=16 MASK_PROB=0.5 ./train_action_ae.sh
+#   AE_VERSION=conditioned LATENT_DIM=16 MASK_PROB=0.5 ./train_action_ae.sh
+
+#########################
+# User-facing settings
+#########################
+
+AE_VERSION="${AE_VERSION:-v1}"  # v1/action_only or v2/conditioned
+GPUS="${GPUS:-0}"
+
+BATCH_SIZE="${BATCH_SIZE:-auto}"
+BATCH_SIZE_V1="${BATCH_SIZE_V1:-1024}"
+BATCH_SIZE_V2="${BATCH_SIZE_V2:-8}"
+MAX_STEPS="${MAX_STEPS:-auto}"
+MAX_STEPS_V1="${MAX_STEPS_V1:-100000}"
+MAX_STEPS_V2="${MAX_STEPS_V2:-50000}"
+
+LEARNING_RATE="${LEARNING_RATE:-3e-4}"
+WEIGHT_DECAY="${WEIGHT_DECAY:-1e-4}"
+LOG_EVERY="${LOG_EVERY:-100}"
+EVAL_EVERY="${EVAL_EVERY:-2000}"
+SAVE_EVERY="${SAVE_EVERY:-50000}"
+EVAL_BATCHES="${EVAL_BATCHES:-20}"
+SEED="${SEED:-7}"
+LATENT_DIM="${LATENT_DIM:-}"
+
+# v2-only perception/corruption settings.
+# MASK_PROB is the probability of masking one action step in the 8-step chunk.
+MASK_PROB="${MASK_PROB:-0.3}"
+NOISE_STD="${NOISE_STD:-0.05}"
+NUM_IMAGES_IN_INPUT="${NUM_IMAGES_IN_INPUT:-2}"
+
+WANDB_ENTITY="${WANDB_ENTITY:-kaixi-university-of-maryland}"
+WANDB_PROJECT="${WANDB_PROJECT:-PAIR}"
+export WANDB_MODE="${WANDB_MODE:-online}"
+EXP_NAME="${EXP_NAME:-}"
+
+DRY_RUN="${DRY_RUN:-false}"
+BACKGROUND="${BACKGROUND:-false}"
+
+#################
+# Internal wiring
+#################
+
+CONDA_ENV="${CONDA_ENV:-vla-adapter}"
+ACTIVATE_CONDA="${ACTIVATE_CONDA:-true}"
+
+PAIR_ROOT="${PAIR_ROOT:-/data/kaixi/PAIR}"
+ENV_SH="${ENV_SH:-${PAIR_ROOT}/kaixi_scripts/env.sh}"
+ACTION_AE_DIR="${ACTION_AE_DIR:-${PAIR_ROOT}/action_ae}"
+VLA_ADAPTER_DIR="${VLA_ADAPTER_DIR:-${PAIR_ROOT}/VLA-Adapter}"
+DATA_ROOT_DIR="${DATA_ROOT_DIR:-/data/kaixi/dataset/libero}"
+RUN_ROOT_DIR="${RUN_ROOT_DIR:-/umd-datapool/kaixi/PAIR/action_ae_runs}"
+LOG_DIR="${LOG_DIR:-${ACTION_AE_DIR}/logs}"
+CONFIG_PATH="${CONFIG_PATH:-auto}"
+
+# Only v2 uses the frozen VLA to extract perception tokens.
+VLA_PATH="${VLA_PATH:-${VLA_ADAPTER_DIR}/pretrained_models/prism-qwen25-extra-dinosiglip-224px-0_5b}"
+VLA_CONFIG_FILE_PATH="${VLA_CONFIG_FILE_PATH:-${VLA_ADAPTER_DIR}/pretrained_models/configs}"
+EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 ############################
-# 1. AE mode and resources
+# Derived settings
 ############################
 
-# AE_VERSION:
-#   v1, action_only, only_action  -> action-only AE
-#   v2, conditioned, perception   -> perception-conditioned AE
-AE_VERSION="${AE_VERSION:-v1}"
+current_time="${CURRENT_TIME:-$(date +%Y%m%d_%H%M%S)}"
+
 case "${AE_VERSION}" in
     v1|action_only|only_action)
         AE_VERSION="v1"
@@ -30,24 +83,23 @@ case "${AE_VERSION}" in
         ;;
 esac
 
-GPUS="${GPUS:-0}"
-CONDA_ENV="${CONDA_ENV:-vla-adapter}"
-ACTIVATE_CONDA="${ACTIVATE_CONDA:-true}"
+if [[ "${BATCH_SIZE}" == "auto" ]]; then
+    if [[ "${AE_VERSION}" == "v2" ]]; then
+        BATCH_SIZE="${BATCH_SIZE_V2}"
+    else
+        BATCH_SIZE="${BATCH_SIZE_V1}"
+    fi
+fi
 
-############################
-# 2. Paths
-############################
+if [[ "${MAX_STEPS}" == "auto" ]]; then
+    if [[ "${AE_VERSION}" == "v2" ]]; then
+        MAX_STEPS="${MAX_STEPS_V2}"
+    else
+        MAX_STEPS="${MAX_STEPS_V1}"
+    fi
+fi
 
-PAIR_ROOT="${PAIR_ROOT:-/data/kaixi/PAIR}"
-ENV_SH="${ENV_SH:-${PAIR_ROOT}/kaixi_scripts/env.sh}"
-ACTION_AE_DIR="${ACTION_AE_DIR:-${PAIR_ROOT}/action_ae}"
-VLA_ADAPTER_DIR="${VLA_ADAPTER_DIR:-${PAIR_ROOT}/VLA-Adapter}"
-
-DATA_ROOT_DIR="${DATA_ROOT_DIR:-/data/kaixi/dataset/libero}"
-RUN_ROOT_DIR="${RUN_ROOT_DIR:-/umd-datapool/kaixi/PAIR/action_ae_runs}"
-LOG_DIR="${LOG_DIR:-${ACTION_AE_DIR}/logs}"
-
-if [[ -z "${CONFIG_PATH:-}" ]]; then
+if [[ "${CONFIG_PATH}" == "auto" ]]; then
     if [[ "${AE_VERSION}" == "v2" ]]; then
         CONFIG_PATH="${ACTION_AE_DIR}/configs/libero_all_v2_perception.yaml"
     else
@@ -55,74 +107,17 @@ if [[ -z "${CONFIG_PATH:-}" ]]; then
     fi
 fi
 
-# Only v2 uses the frozen VLA to extract perception tokens.
-VLA_PATH="${VLA_PATH:-${VLA_ADAPTER_DIR}/pretrained_models/prism-qwen25-extra-dinosiglip-224px-0_5b}"
-VLA_CONFIG_FILE_PATH="${VLA_CONFIG_FILE_PATH:-${VLA_ADAPTER_DIR}/pretrained_models/configs}"
-
-############################
-# 3. Training knobs
-############################
-
-if [[ -z "${BATCH_SIZE:-}" ]]; then
-    if [[ "${AE_VERSION}" == "v2" ]]; then
-        BATCH_SIZE="8"
-    else
-        BATCH_SIZE="1024"
-    fi
-fi
-
-if [[ -z "${MAX_STEPS:-}" ]]; then
-    if [[ "${AE_VERSION}" == "v2" ]]; then
-        MAX_STEPS="50000"
-    else
-        MAX_STEPS="100000"
-    fi
-fi
-
-LEARNING_RATE="${LEARNING_RATE:-3e-4}"
-WEIGHT_DECAY="${WEIGHT_DECAY:-1e-4}"
-LOG_EVERY="${LOG_EVERY:-100}"
-EVAL_EVERY="${EVAL_EVERY:-2000}"
-SAVE_EVERY="${SAVE_EVERY:-50000}"
-EVAL_BATCHES="${EVAL_BATCHES:-20}"
-SEED="${SEED:-7}"
-
-# Optional model override. Leave empty to use the selected config default.
-LATENT_DIM="${LATENT_DIM:-}"
-
-############################
-# 4. v2 perception/corruption
-############################
-
-# mask_prob is the probability of masking an action step in the 8-step chunk.
-MASK_PROB="${MASK_PROB:-0.3}"
-NOISE_STD="${NOISE_STD:-0.05}"
-NUM_IMAGES_IN_INPUT="${NUM_IMAGES_IN_INPUT:-2}"
-
-############################
-# 5. Logging and launch
-############################
-
-WANDB_ENTITY="${WANDB_ENTITY:-kaixi-university-of-maryland}"
-WANDB_PROJECT="${WANDB_PROJECT:-PAIR}"
-export WANDB_MODE="${WANDB_MODE:-online}"
-
-DRY_RUN="${DRY_RUN:-false}"
-BACKGROUND="${BACKGROUND:-false}"
-EXTRA_ARGS="${EXTRA_ARGS:-}"
-
-current_time="${CURRENT_TIME:-$(date +%Y%m%d_%H%M%S)}"
-if [[ -z "${EXP_NAME:-}" ]]; then
+if [[ -z "${EXP_NAME}" ]]; then
     if [[ "${AE_VERSION}" == "v2" ]]; then
         EXP_NAME="ae_v2_perception_libero_all_${current_time}"
     else
         EXP_NAME="ae_libero_1"
     fi
 fi
-LOG_FILE="${LOG_FILE:-${LOG_DIR}/ActionAE--${EXP_NAME}.log}"
+log_file="${LOG_FILE:-${LOG_DIR}/ActionAE--${EXP_NAME}.log}"
 
 ############################
-# 6. Environment
+# Environment
 ############################
 
 source "${ENV_SH}"
@@ -194,7 +189,7 @@ cat <<EOF
 [train_action_ae] wandb: ${WANDB_ENTITY}/${WANDB_PROJECT} (${WANDB_MODE})
 [train_action_ae] exp_name: ${EXP_NAME}
 [train_action_ae] run_root: ${RUN_ROOT_DIR}
-[train_action_ae] log_file: ${LOG_FILE}
+[train_action_ae] log_file: ${log_file}
 EOF
 
 if [[ "${AE_VERSION}" == "v2" ]]; then
@@ -216,10 +211,10 @@ if [[ "${DRY_RUN}" == "true" ]]; then
 fi
 
 if [[ "${BACKGROUND}" == "true" ]]; then
-    nohup "${cmd[@]}" > "${LOG_FILE}" 2>&1 &
+    nohup "${cmd[@]}" > "${log_file}" 2>&1 &
     pid="$!"
     echo "[train_action_ae] started in background: pid=${pid}"
-    echo "[train_action_ae] tail log: tail -f ${LOG_FILE}"
+    echo "[train_action_ae] tail log: tail -f ${log_file}"
 else
-    "${cmd[@]}" 2>&1 | tee "${LOG_FILE}"
+    "${cmd[@]}" 2>&1 | tee "${log_file}"
 fi
