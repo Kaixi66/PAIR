@@ -243,7 +243,7 @@ def init_wandb(config: Dict[str, Any], run_name: str):
 
 
 def add_step_suffix(path: Path, step: int) -> Path:
-    return path.with_name(f"{path.stem}_step-{step:06d}{path.suffix}")
+    return path.with_name(f"{path.stem}_{step}-steps{path.suffix}")
 
 
 def rename_state_dict_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -622,19 +622,10 @@ def train_v2(
             print(f"[action_ae_v2] eval step={step} l1={eval_l1:.6f}")
             if eval_l1 < best_eval_l1:
                 best_eval_l1 = eval_l1
-                best_checkpoint_path = run_dir / "checkpoint_best.pt"
-                best_encoder_path = run_dir / "encoder.pt"
+                best_checkpoint_path = add_step_suffix(run_dir / "checkpoint_best.pt", step)
+                best_encoder_path = add_step_suffix(run_dir / "encoder.pt", step)
                 save_training_checkpoint(
                     path=best_checkpoint_path,
-                    model=model,
-                    optimizer=optimizer,
-                    scheduler=scheduler,
-                    step=step,
-                    best_eval_l1=best_eval_l1,
-                    config=config,
-                )
-                save_training_checkpoint(
-                    path=add_step_suffix(best_checkpoint_path, step),
                     model=model,
                     optimizer=optimizer,
                     scheduler=scheduler,
@@ -648,26 +639,11 @@ def train_v2(
                     config=ae_config,
                     metadata={"step": step, "eval_l1": best_eval_l1, "run_name": run_name},
                 )
-                save_encoder_checkpoint(
-                    path=add_step_suffix(best_encoder_path, step),
-                    encoder=model.encoder,
-                    config=ae_config,
-                    metadata={"step": step, "eval_l1": best_eval_l1, "run_name": run_name},
-                )
 
         if step % save_every == 0 or step == max_steps:
-            latest_checkpoint_path = run_dir / "checkpoint_latest.pt"
+            latest_checkpoint_path = add_step_suffix(run_dir / "checkpoint_latest.pt", step)
             save_training_checkpoint(
                 path=latest_checkpoint_path,
-                model=model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                step=step,
-                best_eval_l1=best_eval_l1,
-                config=config,
-            )
-            save_training_checkpoint(
-                path=add_step_suffix(latest_checkpoint_path, step),
                 model=model,
                 optimizer=optimizer,
                 scheduler=scheduler,
@@ -806,19 +782,10 @@ def main() -> None:
 
             if eval_l1 < best_eval_l1:
                 best_eval_l1 = eval_l1
-                best_checkpoint_path = run_dir / "checkpoint_best.pt"
-                best_encoder_path = run_dir / "encoder.pt"
+                best_checkpoint_path = add_step_suffix(run_dir / "checkpoint_best.pt", step)
+                best_encoder_path = add_step_suffix(run_dir / "encoder.pt", step)
                 save_training_checkpoint(
                     path=best_checkpoint_path,
-                    model=model,
-                    optimizer=optimizer,
-                    scheduler=scheduler,
-                    step=step,
-                    best_eval_l1=best_eval_l1,
-                    config=config,
-                )
-                save_training_checkpoint(
-                    path=add_step_suffix(best_checkpoint_path, step),
                     model=model,
                     optimizer=optimizer,
                     scheduler=scheduler,
@@ -832,26 +799,11 @@ def main() -> None:
                     config=action_ae_config,
                     metadata={"step": step, "eval_l1": best_eval_l1, "run_name": run_name},
                 )
-                save_encoder_checkpoint(
-                    path=add_step_suffix(best_encoder_path, step),
-                    encoder=model.encoder,
-                    config=action_ae_config,
-                    metadata={"step": step, "eval_l1": best_eval_l1, "run_name": run_name},
-                )
 
         if step % save_every == 0 or step == max_steps:
-            latest_checkpoint_path = run_dir / "checkpoint_latest.pt"
+            latest_checkpoint_path = add_step_suffix(run_dir / "checkpoint_latest.pt", step)
             save_training_checkpoint(
                 path=latest_checkpoint_path,
-                model=model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                step=step,
-                best_eval_l1=best_eval_l1,
-                config=config,
-            )
-            save_training_checkpoint(
-                path=add_step_suffix(latest_checkpoint_path, step),
                 model=model,
                 optimizer=optimizer,
                 scheduler=scheduler,
