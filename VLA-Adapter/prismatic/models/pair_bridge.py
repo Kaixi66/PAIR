@@ -24,6 +24,7 @@ class PairBridgeConfig:
     init_gate_mode: str = "learnable"
     init_gate_value: float = 0.05
     init_gate_granularity: str = "per_step"
+    input_dependent_gate: bool = True
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -36,6 +37,8 @@ class PairBridgeConfig:
             values["bridge_mlp_dim"] = 0
         if "init_gate_granularity" not in values:
             values["init_gate_granularity"] = "scalar"
+        if "input_dependent_gate" not in values:
+            values["input_dependent_gate"] = False
         return cls(**values)
 
 
@@ -46,6 +49,7 @@ class PairBridgeOutput:
     z_align: Tensor
     action_init_delta: Tensor
     init_gate: Tensor
+    init_gate_raw: Tensor
 
 
 class PairBridge(nn.Module):
@@ -78,28 +82,42 @@ class PairBridge(nn.Module):
         self.init_proj = nn.Linear(self.config.bridge_dim, self.config.llm_dim, bias=True)
 
         self.slot_scale = nn.Parameter(torch.ones(self.config.action_dim, self.config.llm_dim))
-        if self.config.init_gate_granularity == "scalar":
-            init_gate = torch.full((), float(self.config.init_gate_value))
-        elif self.config.init_gate_granularity == "per_step":
-            init_gate = torch.full((self.config.horizon,), float(self.config.init_gate_value))
+        self.uses_input_dependent_gate = (
+            self.config.input_dependent_gate
+            and self.config.init_gate_mode == "learnable"
+            and self.config.init_gate_granularity == "per_step"
+        )
+        if self.uses_input_dependent_gate:
+            self.gate_norm = nn.LayerNorm(self.config.bridge_dim)
+            self.gate_proj = nn.Linear(self.config.bridge_dim, 1, bias=True)
         else:
-            raise ValueError(
-                "Unsupported init_gate_granularity="
-                f"{self.config.init_gate_granularity!r}; expected 'scalar' or 'per_step'."
-            )
-        if self.config.init_gate_mode == "learnable":
-            self.init_gate = nn.Parameter(init_gate)
-        elif self.config.init_gate_mode == "fixed":
-            self.register_buffer("init_gate", init_gate)
-        else:
-            raise ValueError(
-                f"Unsupported init_gate_mode={self.config.init_gate_mode!r}; expected 'learnable' or 'fixed'."
-            )
+            self.gate_norm = None
+            self.gate_proj = None
+            if self.config.init_gate_granularity == "scalar":
+                init_gate = torch.full((), float(self.config.init_gate_value))
+            elif self.config.init_gate_granularity == "per_step":
+                init_gate = torch.full((self.config.horizon,), float(self.config.init_gate_value))
+            else:
+                raise ValueError(
+                    "Unsupported init_gate_granularity="
+                    f"{self.config.init_gate_granularity!r}; expected 'scalar' or 'per_step'."
+                )
+            if self.config.init_gate_mode == "learnable":
+                self.init_gate = nn.Parameter(init_gate)
+            elif self.config.init_gate_mode == "fixed":
+                self.register_buffer("init_gate", init_gate)
+            else:
+                raise ValueError(
+                    f"Unsupported init_gate_mode={self.config.init_gate_mode!r}; expected 'learnable' or 'fixed'."
+                )
 
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
         nn.init.normal_(self.bridge_queries, mean=0.0, std=0.02)
+        if self.uses_input_dependent_gate:
+            nn.init.zeros_(self.gate_proj.weight)
+            nn.init.constant_(self.gate_proj.bias, float(self.config.init_gate_value))
 
     def keep_high_precision_params(self) -> None:
         """Keep small scale/gate parameters in fp32 after bulk bf16 conversion."""
@@ -107,7 +125,10 @@ class PairBridge(nn.Module):
             self.slot_scale.detach().float(),
             requires_grad=self.slot_scale.requires_grad,
         )
-        if isinstance(self.init_gate, nn.Parameter):
+        if self.uses_input_dependent_gate:
+            self.gate_norm.float()
+            self.gate_proj.float()
+        elif isinstance(self.init_gate, nn.Parameter):
             self.init_gate = nn.Parameter(self.init_gate.detach().float(), requires_grad=self.init_gate.requires_grad)
         else:
             self.init_gate = self.init_gate.detach().float()
@@ -159,14 +180,23 @@ class PairBridge(nn.Module):
         z_init = self.init_proj(bridge_tokens)
         per_dim_init = z_init.unsqueeze(2) * self.slot_scale.to(dtype=z_init.dtype).unsqueeze(0).unsqueeze(0)
         action_init_delta = per_dim_init.reshape(batch_size, expected_slots, self.config.llm_dim)
-        gate = torch.tanh(self.init_gate).to(dtype=base_action_init.dtype)
-        if gate.ndim == 0:
-            gated_delta = gate * action_init_delta.to(dtype=base_action_init.dtype)
-        else:
+        if self.uses_input_dependent_gate:
+            gate_raw = self.gate_proj(self.gate_norm(bridge_tokens.float())).squeeze(-1)
+            gate = torch.tanh(gate_raw).to(dtype=base_action_init.dtype)
             gated_delta = (
-                gate.view(1, self.config.horizon, 1, 1)
+                gate.view(batch_size, self.config.horizon, 1, 1)
                 * per_dim_init.to(dtype=base_action_init.dtype)
             ).reshape(batch_size, expected_slots, self.config.llm_dim)
+        else:
+            gate_raw = self.init_gate
+            gate = torch.tanh(self.init_gate).to(dtype=base_action_init.dtype)
+            if gate.ndim == 0:
+                gated_delta = gate * action_init_delta.to(dtype=base_action_init.dtype)
+            else:
+                gated_delta = (
+                    gate.view(1, self.config.horizon, 1, 1)
+                    * per_dim_init.to(dtype=base_action_init.dtype)
+                ).reshape(batch_size, expected_slots, self.config.llm_dim)
         action_init = base_action_init + gated_delta
 
         return PairBridgeOutput(
@@ -175,6 +205,7 @@ class PairBridge(nn.Module):
             z_align=z_align,
             action_init_delta=action_init_delta,
             init_gate=gate,
+            init_gate_raw=gate_raw,
         )
 
 

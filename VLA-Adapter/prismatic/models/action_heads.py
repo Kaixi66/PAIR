@@ -153,6 +153,12 @@ class MLPResNet(nn.Module):
                 if gate.shape[0] != x.shape[1]:
                     raise ValueError(f"Expected per-step pair gate with length {x.shape[1]}, got {gate.shape[0]}")
                 gate = gate.view(1, -1, 1)
+            elif gate.ndim == 2:
+                if gate.shape != x.shape[:2]:
+                    raise ValueError(f"Expected batched per-step pair gate with shape {x.shape[:2]}, got {gate.shape}")
+                gate = gate.unsqueeze(-1)
+            elif gate.ndim != 0:
+                raise ValueError(f"Expected scalar, per-step, or batched per-step pair gate, got shape {gate.shape}")
             x = x + gate * pair_x
         x = self.relu(x)  # shape: (batch_size, hidden_dim)
         for i, block in enumerate(self.mlp_resnet_blocks):

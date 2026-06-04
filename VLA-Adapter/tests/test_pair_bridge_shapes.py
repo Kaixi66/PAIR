@@ -20,12 +20,17 @@ def test_pair_bridge_shapes_and_gate_init(tmp_path: Path):
 
     assert output.action_init.shape == (2, 56, 4096)
     assert output.z_align.shape == (2, 8, 16)
-    assert output.init_gate.shape == (8,)
-    assert torch.allclose(output.init_gate, torch.full((8,), torch.tanh(torch.tensor(0.05)).item()))
+    assert output.init_gate.shape == (2, 8)
+    assert output.init_gate_raw.shape == (2, 8)
+    assert torch.allclose(output.init_gate, torch.full((2, 8), torch.tanh(torch.tensor(0.05)).item()))
     assert not torch.allclose(output.action_init, base_init)
     assert "slot_bias" not in dict(bridge.named_parameters())
     assert bridge.config.init_gate_granularity == "per_step"
-    assert dict(bridge.named_parameters())["init_gate"].shape == (8,)
+    assert bridge.config.input_dependent_gate
+    assert "init_gate" not in dict(bridge.named_parameters())
+    assert dict(bridge.named_parameters())["gate_proj.weight"].shape == (1, 512)
+    assert torch.count_nonzero(bridge.gate_proj.weight) == 0
+    assert torch.allclose(bridge.gate_proj.bias, torch.full((1,), config.init_gate_value))
     assert bridge.config.bridge_mlp_dim == 1024
     assert bridge.bridge_mlp is not None
     assert torch.count_nonzero(bridge.bridge_mlp[-1].weight) > 0
@@ -43,6 +48,7 @@ def test_pair_bridge_shapes_and_gate_init(tmp_path: Path):
 
     assert loaded_output.action_init.shape == (2, 56, 4096)
     assert loaded_output.z_align.shape == (2, 8, 16)
+    assert loaded_output.init_gate.shape == (2, 8)
 
 
 def test_pair_bridge_fixed_gate_mode():
@@ -77,9 +83,10 @@ def test_pair_bridge_keeps_scale_and_gate_fp32_after_bf16_cast():
     assert bridge.down_proj.weight.dtype == torch.bfloat16
     assert bridge.bridge_mlp[0].weight.dtype == torch.bfloat16
     assert bridge.slot_scale.dtype == torch.float32
-    assert bridge.init_gate.dtype == torch.float32
+    assert bridge.gate_norm.weight.dtype == torch.float32
+    assert bridge.gate_proj.weight.dtype == torch.float32
     assert dict(bridge.named_parameters())["slot_scale"].dtype == torch.float32
-    assert dict(bridge.named_parameters())["init_gate"].dtype == torch.float32
+    assert dict(bridge.named_parameters())["gate_proj.weight"].dtype == torch.float32
 
 
 def test_pair_bridge_per_step_gate_broadcasts_across_action_dims():
@@ -99,10 +106,26 @@ def test_pair_bridge_per_step_gate_broadcasts_across_action_dims():
 
     output = bridge(perception_tokens, base_init)
 
-    assert output.init_gate.shape == (8,)
+    assert output.init_gate.shape == (2, 8)
     delta_by_step = output.action_init_delta.reshape(2, 8, 7, 64)
-    expected = base_init + (output.init_gate.view(1, 8, 1, 1) * delta_by_step).reshape(2, 56, 64)
+    expected = base_init + (output.init_gate.view(2, 8, 1, 1) * delta_by_step).reshape(2, 56, 64)
     assert torch.allclose(output.action_init, expected)
+
+
+def test_pair_bridge_input_dependent_gate_changes_with_tokens():
+    torch.manual_seed(23)
+    config = PairBridgeConfig(llm_dim=64, bridge_dim=32, latent_dim=8, horizon=8, action_dim=7, num_heads=4)
+    bridge = PairBridge(config)
+    with torch.no_grad():
+        bridge.gate_proj.weight[:, 0] = 0.25
+        bridge.gate_proj.bias.zero_()
+    perception_tokens = torch.randn(2, 6, 64)
+    base_init = torch.zeros(2, 56, 64)
+
+    output = bridge(perception_tokens, base_init)
+
+    assert output.init_gate.shape == (2, 8)
+    assert output.init_gate.std(unbiased=False) > 0
 
 
 def test_pair_bridge_legacy_config_disables_mlp():
@@ -120,7 +143,9 @@ def test_pair_bridge_legacy_config_disables_mlp():
 
     assert bridge.config.bridge_mlp_dim == 0
     assert bridge.config.init_gate_granularity == "scalar"
+    assert not bridge.config.input_dependent_gate
     assert bridge.bridge_mlp is None
+    assert "init_gate" in dict(bridge.named_parameters())
 
 
 def test_pair_bridge_perception_mask():

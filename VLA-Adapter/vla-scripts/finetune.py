@@ -532,8 +532,7 @@ def run_forward_pass(
             pair_align_loss = cosine_alignment_loss(pair_output.z_align, action_latents)
             pair_lambda = float(cfg.pair_align_weight)
             pair_init_gate = pair_output.init_gate.detach().float()
-            pair_module = pair_bridge.module if hasattr(pair_bridge, "module") else pair_bridge
-            pair_init_gate_raw = pair_module.init_gate.detach().float()
+            pair_init_gate_raw = pair_output.init_gate_raw.detach().float()
 
         predicted_actions = action_head.module.predict_action(
             multi_layer_hidden_states,
@@ -557,31 +556,32 @@ def run_forward_pass(
         )
         if pair_align_loss is not None:
             pair_delta = pair_output.action_init_delta.detach().float()
+            pair_delta = pair_delta.reshape(
+                pair_delta.shape[0],
+                pair_output.z_align.shape[1],
+                ACTION_DIM,
+                pair_delta.shape[-1],
+            )
+            pair_delta_norm = pair_delta.norm(dim=-1)
             if pair_init_gate.ndim == 0:
-                pair_effective_delta_norm = (pair_init_gate.abs() * pair_delta.norm(dim=-1)).mean()
+                pair_effective_delta_norm = (pair_init_gate.abs().view(1, 1, 1) * pair_delta_norm).mean()
+            elif pair_init_gate.ndim == 1:
+                pair_effective_delta_norm = (pair_init_gate.abs().view(1, -1, 1) * pair_delta_norm).mean()
             else:
-                pair_delta = pair_delta.reshape(
-                    pair_delta.shape[0],
-                    pair_output.z_align.shape[1],
-                    ACTION_DIM,
-                    pair_delta.shape[-1],
-                )
-                pair_effective_delta_norm = (
-                    pair_init_gate.abs().view(1, -1, 1, 1) * pair_delta.norm(dim=-1)
-                ).mean()
+                pair_effective_delta_norm = (pair_init_gate.abs().unsqueeze(-1) * pair_delta_norm).mean()
             pair_init_gate_values = pair_init_gate.reshape(-1)
             pair_metrics = {
                 "pair/align_loss": pair_align_loss.item(),
                 "pair/init_gate": pair_init_gate_values.mean().item(),
                 "pair/init_gate_std": pair_init_gate_values.std(unbiased=False).item(),
-                "pair/init_gate_min": pair_init_gate_values.min().item(),
-                "pair/init_gate_max": pair_init_gate_values.max().item(),
             }
             if cfg.pair_log_debug_metrics:
                 pair_metrics.update(
                     {
                         "pair/lambda": pair_lambda,
                         "pair/init_gate_raw": pair_init_gate_raw.mean().item(),
+                        "pair/init_gate_min": pair_init_gate_values.min().item(),
+                        "pair/init_gate_max": pair_init_gate_values.max().item(),
                         "pair/init_delta_norm": pair_output.action_init_delta.detach().float().norm(dim=-1).mean().item(),
                         "pair/init_effective_delta_norm": pair_effective_delta_norm.item(),
                         "pair/z_align_norm": pair_output.z_align.detach().float().norm(dim=-1).mean().item(),
@@ -1279,8 +1279,6 @@ def finetune(cfg: FinetuneConfig) -> None:
         "pair/align_loss": deque(maxlen=cfg.grad_accumulation_steps),
         "pair/init_gate": deque(maxlen=cfg.grad_accumulation_steps),
         "pair/init_gate_std": deque(maxlen=cfg.grad_accumulation_steps),
-        "pair/init_gate_min": deque(maxlen=cfg.grad_accumulation_steps),
-        "pair/init_gate_max": deque(maxlen=cfg.grad_accumulation_steps),
     }
     if cfg.pair_log_debug_metrics:
         recent_metrics.update(
@@ -1289,6 +1287,8 @@ def finetune(cfg: FinetuneConfig) -> None:
                 "next_actions_accuracy": deque(maxlen=cfg.grad_accumulation_steps),
                 "pair/lambda": deque(maxlen=cfg.grad_accumulation_steps),
                 "pair/init_gate_raw": deque(maxlen=cfg.grad_accumulation_steps),
+                "pair/init_gate_min": deque(maxlen=cfg.grad_accumulation_steps),
+                "pair/init_gate_max": deque(maxlen=cfg.grad_accumulation_steps),
                 "pair/init_delta_norm": deque(maxlen=cfg.grad_accumulation_steps),
                 "pair/init_effective_delta_norm": deque(maxlen=cfg.grad_accumulation_steps),
                 "pair/z_align_norm": deque(maxlen=cfg.grad_accumulation_steps),
