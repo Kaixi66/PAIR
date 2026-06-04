@@ -27,8 +27,9 @@ action_ae/
 [B, 8, 7] -> encoder -> [B, 8, 16] -> decoder -> [B, 8, 7]
 ```
 
-The saved `encoder.pt` is the Stage 2 teacher artifact. It contains an
-`ActionEncoder` state dict and the model config needed to instantiate it.
+The saved `encoder_<step>-steps.pt` artifact is the Stage 2 teacher checkpoint.
+It contains an `ActionEncoder` state dict and the model config needed to
+instantiate it.
 
 `ActionPerceptionTransformerAE` reconstructs clean actions from corrupted
 actions cross-attended to frozen VLA perception tokens:
@@ -41,8 +42,8 @@ The default v2 encoder uses one action self-attention layer followed by one
 perception cross-attention block; the decoder keeps two action self-attention
 layers.
 
-Its `encoder.pt` metadata sets `requires_perception=true`, so PAIR Stage 2 can
-call the teacher with `(actions, perception_tokens, perception_mask)`.
+Its `encoder_<step>-steps.pt` metadata sets `requires_perception=true`, so PAIR
+Stage 2 can call the teacher with `(actions, perception_tokens, perception_mask)`.
 
 ## Training
 
