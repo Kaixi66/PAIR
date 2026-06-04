@@ -22,12 +22,12 @@ model:
   hidden_dim: 64
   latent_dim: 16
   perception_dim: 896
-  encoder_layers: 2
+  encoder_layers: 1
   decoder_layers: 2
   num_heads: 4
   ffn_dim: 256
   perception_heads: 4
-  perception_layers: 2
+  perception_layers: 1
   dropout: 0.0
   activation: gelu
   norm_first: true

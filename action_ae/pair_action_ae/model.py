@@ -43,12 +43,12 @@ class ActionPerceptionAEConfig:
     hidden_dim: int = 64
     latent_dim: int = 16
     perception_dim: int = 896
-    encoder_layers: int = 2
+    encoder_layers: int = 1
     decoder_layers: int = 2
     num_heads: int = 4
     ffn_dim: int = 256
     perception_heads: int = 4
-    perception_layers: int = 2
+    perception_layers: int = 1
     dropout: float = 0.0
     activation: str = "gelu"
     norm_first: bool = True

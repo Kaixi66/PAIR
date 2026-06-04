@@ -72,6 +72,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wandb_mode", type=str, default=None)
     parser.add_argument("--ae_version", choices=("v1", "v2"), default=None)
     parser.add_argument("--latent_dim", type=int, default=None)
+    parser.add_argument("--encoder_layers", type=int, default=None)
+    parser.add_argument("--decoder_layers", type=int, default=None)
+    parser.add_argument("--perception_layers", type=int, default=None)
     parser.add_argument("--vlm_path", type=str, default=None)
     parser.add_argument("--vla_config_file_path", type=str, default=None)
     parser.add_argument("--num_images_in_input", type=int, default=None)
@@ -136,6 +139,12 @@ def apply_cli_overrides(config: Dict[str, Any], args: argparse.Namespace) -> Dic
         updates.setdefault("model", {})["ae_version"] = args.ae_version
     if args.latent_dim is not None:
         updates.setdefault("model", {})["latent_dim"] = args.latent_dim
+    if args.encoder_layers is not None:
+        updates.setdefault("model", {})["encoder_layers"] = args.encoder_layers
+    if args.decoder_layers is not None:
+        updates.setdefault("model", {})["decoder_layers"] = args.decoder_layers
+    if args.perception_layers is not None:
+        updates.setdefault("model", {})["perception_layers"] = args.perception_layers
     if args.vlm_path is not None:
         updates.setdefault("vla", {})["vlm_path"] = args.vlm_path
     if args.vla_config_file_path is not None:
@@ -542,6 +551,12 @@ def train_v2(
     print(f"[action_ae_v2] max_steps: {max_steps}")
     print(f"[action_ae_v2] batch_size: {training_cfg.get('batch_size', 8)}")
     print(f"[action_ae_v2] latent_dim: {ae_config.latent_dim}")
+    print(
+        "[action_ae_v2] layers: "
+        f"encoder={ae_config.encoder_layers} "
+        f"perception={ae_config.perception_layers} "
+        f"decoder={ae_config.decoder_layers}"
+    )
     print(f"[action_ae_v2] mask_prob: {ae_config.mask_prob} noise_std: {ae_config.noise_std}")
 
     for step in range(1, max_steps + 1):

@@ -37,6 +37,10 @@ actions cross-attended to frozen VLA perception tokens:
 actions [B, 8, 7] + perception [B, N, D] -> encoder -> [B, 8, 16] -> decoder -> [B, 8, 7]
 ```
 
+The default v2 encoder uses one action self-attention layer followed by one
+perception cross-attention block; the decoder keeps two action self-attention
+layers.
+
 Its `encoder.pt` metadata sets `requires_perception=true`, so PAIR Stage 2 can
 call the teacher with `(actions, perception_tokens, perception_mask)`.
 

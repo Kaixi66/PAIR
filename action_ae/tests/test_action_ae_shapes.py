@@ -50,8 +50,8 @@ def test_action_perception_ae_forward_shapes():
     assert output.latents.shape == (2, 8, 16)
     assert output.corrupted_actions.shape == (2, 8, 7)
     assert output.action_mask.shape == (2, 8)
-    assert config.encoder_layers == 2
-    assert config.perception_layers == 2
+    assert config.encoder_layers == 1
+    assert config.perception_layers == 1
 
 
 def test_action_corruption_masks_full_steps():

@@ -9,10 +9,10 @@ set -euo pipefail
 # User-facing settings
 #########################
 
-AE_VERSION="${AE_VERSION:-v1}"  # v1/action_only or v2/conditioned
+AE_VERSION="${AE_VERSION:-v2}"  # v1/action_only or v2/conditioned
 GPUS="${GPUS:-0}"
 
-BATCH_SIZE="${BATCH_SIZE:-8}"
+BATCH_SIZE="${BATCH_SIZE:-64}"
 MAX_STEPS="${MAX_STEPS:-50000}"
 
 LEARNING_RATE="${LEARNING_RATE:-3e-4}"
@@ -21,7 +21,10 @@ EVAL_EVERY="${EVAL_EVERY:-2000}"
 SAVE_EVERY="${SAVE_EVERY:-50000}"
 EVAL_BATCHES="${EVAL_BATCHES:-20}"
 SEED="${SEED:-7}"
-LATENT_DIM="${LATENT_DIM:-}"
+LATENT_DIM="${LATENT_DIM:-16}"
+ENCODER_LAYERS="${ENCODER_LAYERS:-1}"
+PERCEPTION_LAYERS="${PERCEPTION_LAYERS:-1}"
+DECODER_LAYERS="${DECODER_LAYERS:-2}"
 
 # Corruption settings. MASK_PROB is the probability of masking one action step in the 8-step chunk.
 MASK_PROB="${MASK_PROB:-0.3}"
@@ -31,7 +34,7 @@ NUM_IMAGES_IN_INPUT="${NUM_IMAGES_IN_INPUT:-2}"
 WANDB_ENTITY="${WANDB_ENTITY:-kaixi-university-of-maryland}"
 WANDB_PROJECT="${WANDB_PROJECT:-PAIR}"
 export WANDB_MODE="${WANDB_MODE:-online}"
-EXP_NAME="${EXP_NAME:-}"
+EXP_NAME="${EXP_NAME:-conditioned_AE}"
 
 DRY_RUN="${DRY_RUN:-false}"
 BACKGROUND="${BACKGROUND:-false}"
@@ -143,6 +146,9 @@ if [[ "${AE_VERSION}" == "v2" ]]; then
         --vlm_path "${VLA_PATH}"
         --vla_config_file_path "${VLA_CONFIG_FILE_PATH}"
         --num_images_in_input "${NUM_IMAGES_IN_INPUT}"
+        --encoder_layers "${ENCODER_LAYERS}"
+        --perception_layers "${PERCEPTION_LAYERS}"
+        --decoder_layers "${DECODER_LAYERS}"
         --mask_prob "${MASK_PROB}"
         --noise_std "${NOISE_STD}"
     )
@@ -174,6 +180,9 @@ if [[ "${AE_VERSION}" == "v2" ]]; then
 [train_action_ae] vla_path: ${VLA_PATH}
 [train_action_ae] vla_config_file_path: ${VLA_CONFIG_FILE_PATH}
 [train_action_ae] num_images_in_input: ${NUM_IMAGES_IN_INPUT}
+[train_action_ae] encoder_layers: ${ENCODER_LAYERS}
+[train_action_ae] perception_layers: ${PERCEPTION_LAYERS}
+[train_action_ae] decoder_layers: ${DECODER_LAYERS}
 [train_action_ae] mask_prob: ${MASK_PROB}
 [train_action_ae] noise_std: ${NOISE_STD}
 EOF
