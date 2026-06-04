@@ -71,6 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wandb_project", type=str, default=None)
     parser.add_argument("--wandb_mode", type=str, default=None)
     parser.add_argument("--ae_version", choices=("v1", "v2"), default=None)
+    parser.add_argument("--latent_dim", type=int, default=None)
     parser.add_argument("--vlm_path", type=str, default=None)
     parser.add_argument("--vla_config_file_path", type=str, default=None)
     parser.add_argument("--num_images_in_input", type=int, default=None)
@@ -133,6 +134,8 @@ def apply_cli_overrides(config: Dict[str, Any], args: argparse.Namespace) -> Dic
         updates.setdefault("wandb", {})["mode"] = args.wandb_mode
     if args.ae_version is not None:
         updates.setdefault("model", {})["ae_version"] = args.ae_version
+    if args.latent_dim is not None:
+        updates.setdefault("model", {})["latent_dim"] = args.latent_dim
     if args.vlm_path is not None:
         updates.setdefault("vla", {})["vlm_path"] = args.vlm_path
     if args.vla_config_file_path is not None:
