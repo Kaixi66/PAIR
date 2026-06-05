@@ -24,16 +24,17 @@ PAIR_ALIGN_WEIGHT="${PAIR_ALIGN_WEIGHT:-0.1}"
 PAIR_BRIDGE_DIM="${PAIR_BRIDGE_DIM:-512}"
 
 PAIR_INIT_GATE_MODE="${PAIR_INIT_GATE_MODE:-learnable}"
-PAIR_INIT_GATE_VALUE="${PAIR_INIT_GATE_VALUE:-0.5}"
+PAIR_INIT_GATE_VALUE="${PAIR_INIT_GATE_VALUE:-0.3}"
 PAIR_INIT_GATE_GRANULARITY="${PAIR_INIT_GATE_GRANULARITY:-per_step}"
+PAIR_GATE_ACTIVATION="${PAIR_GATE_ACTIVATION:-tanh}"
 PAIR_LOG_DEBUG_METRICS="${PAIR_LOG_DEBUG_METRICS:-False}"
 
-PAIR_ACTION_AE_ENCODER_PATH="${PAIR_ACTION_AE_ENCODER_PATH:-/umd-datapool/kaixi/PAIR/action_ae_runs/ae_libero_1/encoder.pt}"
+PAIR_ACTION_AE_ENCODER_PATH="${PAIR_ACTION_AE_ENCODER_PATH:-/umd-datapool/kaixi/PAIR/action_ae_runs/conditionedAE_en2_de1/encoder_9000-steps.pt}"
 
 WANDB_ENTITY="${WANDB_ENTITY:-kaixi-university-of-maryland}"
 WANDB_PROJECT="${WANDB_PROJECT:-PAIR}"
 export WANDB_MODE="${WANDB_MODE:-online}"
-EXP_NAME="${EXP_NAME:-PAIR_L_depGate0.5_spatial}"
+EXP_NAME="${EXP_NAME:-PAIR_spatial_AE_V2_init0.3}"
 
 DRY_RUN="${DRY_RUN:-false}"
 BACKGROUND="${BACKGROUND:-false}"
@@ -160,6 +161,7 @@ cmd=(
     --pair_init_gate_mode "${PAIR_INIT_GATE_MODE}"
     --pair_init_gate_value "${PAIR_INIT_GATE_VALUE}"
     --pair_init_gate_granularity "${PAIR_INIT_GATE_GRANULARITY}"
+    --pair_gate_activation "${PAIR_GATE_ACTIVATION}"
     --pair_log_debug_metrics "${PAIR_LOG_DEBUG_METRICS}"
 )
 
@@ -180,7 +182,7 @@ cat <<EOF
 [train_pair_bridge] action_ae_dir: ${ACTION_AE_DIR}
 [train_pair_bridge] action_ae_encoder: ${PAIR_ACTION_AE_ENCODER_PATH}
 [train_pair_bridge] pair_align_weight: ${PAIR_ALIGN_WEIGHT}
-[train_pair_bridge] pair_init_gate: mode=${PAIR_INIT_GATE_MODE}, raw_value=${PAIR_INIT_GATE_VALUE}, granularity=${PAIR_INIT_GATE_GRANULARITY}
+[train_pair_bridge] pair_init_gate: mode=${PAIR_INIT_GATE_MODE}, actual_value=${PAIR_INIT_GATE_VALUE}, granularity=${PAIR_INIT_GATE_GRANULARITY}, activation=${PAIR_GATE_ACTIVATION}
 [train_pair_bridge] pair_log_debug_metrics: ${PAIR_LOG_DEBUG_METRICS}
 [train_pair_bridge] wandb: ${WANDB_ENTITY}/${WANDB_PROJECT} (${WANDB_MODE})
 [train_pair_bridge] exp_name: ${EXP_NAME}

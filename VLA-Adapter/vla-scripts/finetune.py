@@ -151,6 +151,7 @@ class FinetuneConfig:
     pair_init_gate_mode: str = "learnable"
     pair_init_gate_value: float = 0.05
     pair_init_gate_granularity: str = "per_step"
+    pair_gate_activation: str = "sigmoid"
     pair_log_debug_metrics: bool = False
     # fmt: on
 
@@ -583,6 +584,12 @@ def run_forward_pass(
                 "pair/init_gate_std": pair_init_gate_values.std(unbiased=False).item(),
             }
             if cfg.pair_log_debug_metrics:
+                if pair_init_gate.ndim == 0:
+                    pair_step_gate = pair_init_gate.expand(NUM_ACTIONS_CHUNK)
+                elif pair_init_gate.ndim == 1:
+                    pair_step_gate = pair_init_gate
+                else:
+                    pair_step_gate = pair_init_gate.mean(dim=0)
                 pair_metrics.update(
                     {
                         "pair/lambda": pair_lambda,
@@ -592,6 +599,12 @@ def run_forward_pass(
                         "pair/init_delta_norm": pair_output.action_init_delta.detach().float().norm(dim=-1).mean().item(),
                         "pair/init_effective_delta_norm": pair_effective_delta_norm.item(),
                         "pair/z_align_norm": pair_output.z_align.detach().float().norm(dim=-1).mean().item(),
+                    }
+                )
+                pair_metrics.update(
+                    {
+                        f"pair/init_gate_step_{step_idx}": pair_step_gate[step_idx].item()
+                        for step_idx in range(min(NUM_ACTIONS_CHUNK, pair_step_gate.shape[0]))
                     }
                 )
             metrics.update(pair_metrics)
@@ -1153,6 +1166,8 @@ def finetune(cfg: FinetuneConfig) -> None:
             init_gate_mode=cfg.pair_init_gate_mode,
             init_gate_value=cfg.pair_init_gate_value,
             init_gate_granularity=cfg.pair_init_gate_granularity,
+            gate_activation=cfg.pair_gate_activation,
+            init_gate_value_is_actual=True,
         )
         pair_bridge = init_module(
             PairBridge,
@@ -1300,6 +1315,10 @@ def finetune(cfg: FinetuneConfig) -> None:
                 "pair/init_delta_norm": deque(maxlen=cfg.grad_accumulation_steps),
                 "pair/init_effective_delta_norm": deque(maxlen=cfg.grad_accumulation_steps),
                 "pair/z_align_norm": deque(maxlen=cfg.grad_accumulation_steps),
+                **{
+                    f"pair/init_gate_step_{step_idx}": deque(maxlen=cfg.grad_accumulation_steps)
+                    for step_idx in range(NUM_ACTIONS_CHUNK)
+                },
             }
         )
 

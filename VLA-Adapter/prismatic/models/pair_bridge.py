@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -25,12 +26,15 @@ class PairBridgeConfig:
     init_gate_value: float = 0.05
     init_gate_granularity: str = "per_step"
     input_dependent_gate: bool = True
+    gate_activation: str = "sigmoid"
+    init_gate_value_is_actual: bool = True
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Dict[str, object]) -> "PairBridgeConfig":
+        is_legacy_gate_config = "gate_activation" not in data
         allowed = set(cls.__dataclass_fields__.keys())
         values = {key: value for key, value in data.items() if key in allowed}
         if "bridge_mlp_dim" not in values:
@@ -39,6 +43,10 @@ class PairBridgeConfig:
             values["init_gate_granularity"] = "scalar"
         if "input_dependent_gate" not in values:
             values["input_dependent_gate"] = False
+        if "gate_activation" not in values:
+            values["gate_activation"] = "tanh"
+        if "init_gate_value_is_actual" not in values:
+            values["init_gate_value_is_actual"] = not is_legacy_gate_config
         return cls(**values)
 
 
@@ -93,10 +101,11 @@ class PairBridge(nn.Module):
         else:
             self.gate_norm = None
             self.gate_proj = None
+            init_gate_raw_value = self._initial_gate_raw_value()
             if self.config.init_gate_granularity == "scalar":
-                init_gate = torch.full((), float(self.config.init_gate_value))
+                init_gate = torch.full((), init_gate_raw_value)
             elif self.config.init_gate_granularity == "per_step":
-                init_gate = torch.full((self.config.horizon,), float(self.config.init_gate_value))
+                init_gate = torch.full((self.config.horizon,), init_gate_raw_value)
             else:
                 raise ValueError(
                     "Unsupported init_gate_granularity="
@@ -113,11 +122,35 @@ class PairBridge(nn.Module):
 
         self.reset_parameters()
 
+    def _initial_gate_raw_value(self) -> float:
+        value = float(self.config.init_gate_value)
+        activation = self.config.gate_activation
+        if not self.config.init_gate_value_is_actual:
+            return value
+        if activation == "sigmoid":
+            if not 0.0 < value < 1.0:
+                raise ValueError("Sigmoid gate actual init value must be in (0, 1).")
+            return math.log(value / (1.0 - value))
+        if activation == "tanh":
+            if not -1.0 < value < 1.0:
+                raise ValueError("Tanh gate actual init value must be in (-1, 1).")
+            return math.atanh(value)
+        raise ValueError(f"Unsupported gate_activation={activation!r}; expected 'sigmoid' or 'tanh'.")
+
+    def _activate_gate(self, gate_raw: Tensor) -> Tensor:
+        if self.config.gate_activation == "sigmoid":
+            return torch.sigmoid(gate_raw)
+        if self.config.gate_activation == "tanh":
+            return torch.tanh(gate_raw)
+        raise ValueError(
+            f"Unsupported gate_activation={self.config.gate_activation!r}; expected 'sigmoid' or 'tanh'."
+        )
+
     def reset_parameters(self) -> None:
         nn.init.normal_(self.bridge_queries, mean=0.0, std=0.02)
         if self.uses_input_dependent_gate:
             nn.init.zeros_(self.gate_proj.weight)
-            nn.init.constant_(self.gate_proj.bias, float(self.config.init_gate_value))
+            nn.init.constant_(self.gate_proj.bias, self._initial_gate_raw_value())
 
     def keep_high_precision_params(self) -> None:
         """Keep small scale/gate parameters in fp32 after bulk bf16 conversion."""
@@ -182,14 +215,14 @@ class PairBridge(nn.Module):
         action_init_delta = per_dim_init.reshape(batch_size, expected_slots, self.config.llm_dim)
         if self.uses_input_dependent_gate:
             gate_raw = self.gate_proj(self.gate_norm(bridge_tokens.float())).squeeze(-1)
-            gate = torch.tanh(gate_raw).to(dtype=base_action_init.dtype)
+            gate = self._activate_gate(gate_raw).to(dtype=base_action_init.dtype)
             gated_delta = (
                 gate.view(batch_size, self.config.horizon, 1, 1)
                 * per_dim_init.to(dtype=base_action_init.dtype)
             ).reshape(batch_size, expected_slots, self.config.llm_dim)
         else:
             gate_raw = self.init_gate
-            gate = torch.tanh(self.init_gate).to(dtype=base_action_init.dtype)
+            gate = self._activate_gate(self.init_gate).to(dtype=base_action_init.dtype)
             if gate.ndim == 0:
                 gated_delta = gate * action_init_delta.to(dtype=base_action_init.dtype)
             else:

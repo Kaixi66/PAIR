@@ -848,14 +848,16 @@ class OpenVLAForActionPrediction(PrismaticForConditionalGeneration):
         # Extract hidden states for action tokens
         multi_layer_hidden_states = []
         
+        batch_size = input_embeddings.shape[0]
         for item in language_model_output.hidden_states[0:]:
             # last_hidden_states = output.hidden_states[-1]  # (B, seq_len, D)
             # Get hidden states for text portion of prompt+response (after the vision patches)
             text_hidden_states = item
             # Get hidden states for action portion of response
-            actions_hidden_states = text_hidden_states[:, NUM_PATCHES+ NUM_PROMPT_TOKENS : NUM_PATCHES + NUM_PROMPT_TOKENS + NUM_TOKENS, :,].reshape(1, 1, NUM_TOKENS, -1).to(torch.bfloat16)
+            actions_hidden_states = text_hidden_states[
+                :, NUM_PATCHES + NUM_PROMPT_TOKENS : NUM_PATCHES + NUM_PROMPT_TOKENS + NUM_TOKENS, :
+            ].reshape(batch_size, 1, NUM_TOKENS, -1).to(torch.bfloat16)
             
-            batch_size = item.shape[0]
             task_latten_states = item[:, :NUM_PATCHES].reshape(batch_size, 1, NUM_PATCHES , -1)
             all_hidden_states = torch.cat((task_latten_states, actions_hidden_states),2)
             multi_layer_hidden_states.append(all_hidden_states)
@@ -863,6 +865,7 @@ class OpenVLAForActionPrediction(PrismaticForConditionalGeneration):
         multi_layer_hidden_states = torch.cat(multi_layer_hidden_states, dim = 1)
         
         initial_action_states = None
+        initial_action_gate = None
         if pair_bridge is not None:
             hidden0 = language_model_output.hidden_states[0]
             vision_tokens = hidden0[:, :NUM_PATCHES, :]
@@ -885,7 +888,8 @@ class OpenVLAForActionPrediction(PrismaticForConditionalGeneration):
                 base_action_init=base_action_init,
                 perception_mask=perception_mask,
             )
-            initial_action_states = pair_output.action_init
+            initial_action_states = pair_output.action_init_delta
+            initial_action_gate = pair_output.init_gate
 
         # Handle different prediction methods
         if action_head is not None:
@@ -893,7 +897,8 @@ class OpenVLAForActionPrediction(PrismaticForConditionalGeneration):
             normalized_actions = action_head.predict_action(multi_layer_hidden_states,
                                                 proprio=proprio,
                                                 proprio_projector=proprio_projector,
-                                                initial_action_states=initial_action_states)
+                                                initial_action_states=initial_action_states,
+                                                initial_action_gate=initial_action_gate)
             normalized_actions = normalized_actions.reshape(NUM_ACTIONS_CHUNK, ACTION_DIM)
             normalized_actions = normalized_actions.float().cpu().detach().numpy()
         else:

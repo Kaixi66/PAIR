@@ -630,6 +630,8 @@ def get_pair_bridge(cfg: Any, llm_dim: int) -> Optional[torch.nn.Module]:
     if pair_bridge.config.llm_dim != llm_dim:
         raise ValueError(f"PAIR bridge llm_dim={pair_bridge.config.llm_dim} does not match model llm_dim={llm_dim}")
     pair_bridge = pair_bridge.to(torch.bfloat16).to(DEVICE)
+    if hasattr(pair_bridge, "keep_high_precision_params"):
+        pair_bridge.keep_high_precision_params()
     pair_bridge.eval()
     return pair_bridge
 
