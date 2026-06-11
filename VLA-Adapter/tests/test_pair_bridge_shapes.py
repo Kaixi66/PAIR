@@ -75,6 +75,33 @@ def test_pair_bridge_fixed_gate_mode():
     assert "init_gate" in dict(bridge.named_buffers())
 
 
+def test_pair_bridge_fixed_gate_mode_accepts_exact_one_with_tanh():
+    config = PairBridgeConfig(
+        llm_dim=64,
+        bridge_dim=32,
+        latent_dim=8,
+        horizon=8,
+        action_dim=7,
+        num_heads=4,
+        init_gate_mode="fixed",
+        init_gate_value=1.0,
+        init_gate_granularity="per_step",
+        gate_activation="tanh",
+    )
+    bridge = PairBridge(config)
+    perception_tokens = torch.randn(2, 6, 64)
+    base_init = torch.randn(2, 56, 64)
+
+    output = bridge(perception_tokens, base_init)
+
+    assert output.init_gate.shape == (8,)
+    assert torch.allclose(output.init_gate, torch.ones(8))
+    assert torch.allclose(
+        output.action_init,
+        base_init + output.action_init_delta,
+    )
+
+
 def test_pair_bridge_keeps_scale_and_gate_fp32_after_bf16_cast():
     config = PairBridgeConfig(llm_dim=64, bridge_dim=32, latent_dim=8, horizon=8, action_dim=7, num_heads=4)
     bridge = PairBridge(config).to(torch.bfloat16)

@@ -101,11 +101,15 @@ class PairBridge(nn.Module):
         else:
             self.gate_norm = None
             self.gate_proj = None
-            init_gate_raw_value = self._initial_gate_raw_value()
+            init_gate_value = (
+                float(self.config.init_gate_value)
+                if self.config.init_gate_mode == "fixed"
+                else self._initial_gate_raw_value()
+            )
             if self.config.init_gate_granularity == "scalar":
-                init_gate = torch.full((), init_gate_raw_value)
+                init_gate = torch.full((), init_gate_value)
             elif self.config.init_gate_granularity == "per_step":
-                init_gate = torch.full((self.config.horizon,), init_gate_raw_value)
+                init_gate = torch.full((self.config.horizon,), init_gate_value)
             else:
                 raise ValueError(
                     "Unsupported init_gate_granularity="
@@ -222,7 +226,10 @@ class PairBridge(nn.Module):
             ).reshape(batch_size, expected_slots, self.config.llm_dim)
         else:
             gate_raw = self.init_gate
-            gate = self._activate_gate(self.init_gate).to(dtype=base_action_init.dtype)
+            if self.config.init_gate_mode == "fixed" and self.config.init_gate_value_is_actual:
+                gate = self.init_gate.to(dtype=base_action_init.dtype)
+            else:
+                gate = self._activate_gate(self.init_gate).to(dtype=base_action_init.dtype)
             if gate.ndim == 0:
                 gated_delta = gate * action_init_delta.to(dtype=base_action_init.dtype)
             else:

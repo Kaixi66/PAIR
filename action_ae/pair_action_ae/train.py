@@ -9,16 +9,19 @@ import os
 import random
 import time
 from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Tuple
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 import yaml
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from transformers import AutoConfig, AutoImageProcessor, AutoModelForVision2Seq, AutoProcessor
 
@@ -55,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train PAIR ActionTransformerAE.")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--data_root_dir", type=str, default=None)
+    parser.add_argument("--mixture", "--dataset_name", dest="mixture", type=str, default=None)
     parser.add_argument("--run_root_dir", type=Path, default=None)
     parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--batch_size", type=int, default=None)
@@ -105,6 +109,8 @@ def apply_cli_overrides(config: Dict[str, Any], args: argparse.Namespace) -> Dic
     updates: Dict[str, Any] = {}
     if args.data_root_dir is not None:
         updates.setdefault("data", {})["data_root_dir"] = args.data_root_dir
+    if args.mixture is not None:
+        updates.setdefault("data", {})["mixture"] = args.mixture
     if args.run_root_dir is not None:
         updates.setdefault("run", {})["run_root_dir"] = str(args.run_root_dir)
     if args.run_name is not None:
@@ -156,6 +162,89 @@ def apply_cli_overrides(config: Dict[str, Any], args: argparse.Namespace) -> Dic
     if args.noise_std is not None:
         updates.setdefault("model", {})["noise_std"] = args.noise_std
     return deep_update(config, updates)
+
+
+@dataclass(frozen=True)
+class DistributedState:
+    is_distributed: bool
+    rank: int
+    local_rank: int
+    world_size: int
+    is_main_process: bool
+    device: torch.device
+
+
+def init_distributed_state(device_name: Optional[str]) -> DistributedState:
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    is_distributed = world_size > 1
+
+    if is_distributed:
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+        if not dist.is_initialized():
+            dist.init_process_group(backend=backend)
+        rank = int(os.environ.get("RANK", "0"))
+        local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+        if torch.cuda.is_available():
+            torch.cuda.set_device(local_rank)
+            device = torch.device("cuda", local_rank)
+        else:
+            device = torch.device("cpu")
+    else:
+        rank = 0
+        local_rank = 0
+        if device_name is not None:
+            device = torch.device(device_name)
+        else:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    return DistributedState(
+        is_distributed=is_distributed,
+        rank=rank,
+        local_rank=local_rank,
+        world_size=world_size,
+        is_main_process=rank == 0,
+        device=device,
+    )
+
+
+def cleanup_distributed() -> None:
+    if dist.is_available() and dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def distributed_barrier(distributed_state: DistributedState) -> None:
+    if distributed_state.is_distributed:
+        dist.barrier()
+
+
+def unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
+    return model.module if isinstance(model, DDP) else model
+
+
+def wrap_model_for_training(model: torch.nn.Module, distributed_state: DistributedState) -> torch.nn.Module:
+    if not distributed_state.is_distributed:
+        return model
+    if distributed_state.device.type == "cuda":
+        return DDP(model, device_ids=[distributed_state.local_rank], output_device=distributed_state.local_rank)
+    return DDP(model)
+
+
+def reduce_metrics(metrics: Dict[str, float], device: torch.device, distributed_state: DistributedState) -> Dict[str, float]:
+    if not distributed_state.is_distributed:
+        return metrics
+
+    reduced: Dict[str, float] = {}
+    for key, value in metrics.items():
+        if key == "step":
+            reduced[key] = value
+            continue
+        if isinstance(value, (int, float)):
+            tensor = torch.tensor(float(value), device=device)
+            dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+            reduced[key] = (tensor / distributed_state.world_size).item()
+        else:
+            reduced[key] = value
+    return reduced
 
 
 def set_seed(seed: int) -> None:
@@ -488,14 +577,14 @@ def train_v2(
     run_dir: Path,
     run_name: str,
     wandb_run,
+    distributed_state: DistributedState,
 ) -> None:
     training_cfg = config.setdefault("training", {})
     model_cfg = config.setdefault("model", {})
     data_cfg = config.setdefault("data", {})
     vla_cfg = config.setdefault("vla", {})
 
-    device_name = training_cfg.get("device") or ("cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device(device_name)
+    device = distributed_state.device
     vla, processor = load_frozen_vla_for_perception(vla_cfg, device)
     num_patches = vla.vision_backbone.get_num_patches() * vla.vision_backbone.get_num_images_in_input()
     text_config = getattr(vla.config, "text_config", None)
@@ -507,8 +596,10 @@ def train_v2(
 
     ae_config = ActionPerceptionAEConfig.from_dict(model_cfg)
     model = ActionPerceptionTransformerAE(ae_config).to(device)
-    with (run_dir / "config.yaml").open("w", encoding="utf-8") as f:
-        yaml.safe_dump(config, f, sort_keys=False)
+    model = wrap_model_for_training(model, distributed_state)
+    if distributed_state.is_main_process:
+        with (run_dir / "config.yaml").open("w", encoding="utf-8") as f:
+            yaml.safe_dump(config, f, sort_keys=False)
 
     train_loader, dataset_statistics = make_v2_dataloader(
         data_cfg=data_cfg,
@@ -526,7 +617,8 @@ def train_v2(
         processor=processor,
         train=False,
     )
-    save_json(run_dir / "dataset_statistics.json", dataset_statistics)
+    if distributed_state.is_main_process:
+        save_json(run_dir / "dataset_statistics.json", dataset_statistics)
 
     optimizer = AdamW(
         model.parameters(),
@@ -550,18 +642,21 @@ def train_v2(
     train_iterator = iter(train_loader)
     start_time = time.time()
 
-    print(f"[action_ae_v2] run_dir: {run_dir}")
-    print(f"[action_ae_v2] device: {device}")
-    print(f"[action_ae_v2] max_steps: {max_steps}")
-    print(f"[action_ae_v2] batch_size: {training_cfg.get('batch_size', 8)}")
-    print(f"[action_ae_v2] latent_dim: {ae_config.latent_dim}")
-    print(
-        "[action_ae_v2] layers: "
-        f"encoder={ae_config.encoder_layers} "
-        f"perception={ae_config.perception_layers} "
-        f"decoder={ae_config.decoder_layers}"
-    )
-    print(f"[action_ae_v2] mask_prob: {ae_config.mask_prob} noise_std: {ae_config.noise_std}")
+    if distributed_state.is_main_process:
+        print(f"[action_ae_v2] run_dir: {run_dir}")
+        print(f"[action_ae_v2] device: {device}")
+        print(f"[action_ae_v2] distributed: world_size={distributed_state.world_size}")
+        print(f"[action_ae_v2] max_steps: {max_steps}")
+        print(f"[action_ae_v2] batch_size_per_rank: {training_cfg.get('batch_size', 8)}")
+        print(f"[action_ae_v2] effective_batch_size: {int(training_cfg.get('batch_size', 8)) * distributed_state.world_size}")
+        print(f"[action_ae_v2] latent_dim: {ae_config.latent_dim}")
+        print(
+            "[action_ae_v2] layers: "
+            f"encoder={ae_config.encoder_layers} "
+            f"perception={ae_config.perception_layers} "
+            f"decoder={ae_config.decoder_layers}"
+        )
+        print(f"[action_ae_v2] mask_prob: {ae_config.mask_prob} noise_std: {ae_config.noise_std}")
 
     for step in range(1, max_steps + 1):
         model.train()
@@ -600,59 +695,66 @@ def train_v2(
                     "time/elapsed_sec": time.time() - start_time,
                 }
             )
-            append_jsonl(metrics_path, metrics)
-            if wandb_run is not None:
-                wandb_run.log(metrics, step=step)
-            print(f"[action_ae_v2] step={step} loss={loss.item():.6f} lr={lr:.3e}")
+            metrics = reduce_metrics(metrics, device, distributed_state)
+            if distributed_state.is_main_process:
+                append_jsonl(metrics_path, metrics)
+                if wandb_run is not None:
+                    wandb_run.log(metrics, step=step)
+                print(f"[action_ae_v2] step={step} loss={metrics['train/loss']:.6f} lr={lr:.3e}")
 
         if step % eval_every == 0 or step == max_steps:
-            eval_metrics = evaluate_v2(
-                model=model,
-                vla=vla,
-                eval_loader=eval_loader,
-                device=device,
-                num_patches=num_patches,
-                max_batches=eval_batches,
-            )
-            eval_metrics["step"] = step
-            append_jsonl(metrics_path, eval_metrics)
-            if wandb_run is not None:
-                wandb_run.log(eval_metrics, step=step)
-            eval_l1 = eval_metrics["eval/l1"]
-            print(f"[action_ae_v2] eval step={step} l1={eval_l1:.6f}")
-            if eval_l1 < best_eval_l1:
-                best_eval_l1 = eval_l1
-                best_checkpoint_path = add_step_suffix(run_dir / "checkpoint_best.pt", step)
-                best_encoder_path = add_step_suffix(run_dir / "encoder.pt", step)
+            if distributed_state.is_main_process:
+                module = unwrap_model(model)
+                eval_metrics = evaluate_v2(
+                    model=module,
+                    vla=vla,
+                    eval_loader=eval_loader,
+                    device=device,
+                    num_patches=num_patches,
+                    max_batches=eval_batches,
+                )
+                eval_metrics["step"] = step
+                append_jsonl(metrics_path, eval_metrics)
+                if wandb_run is not None:
+                    wandb_run.log(eval_metrics, step=step)
+                eval_l1 = eval_metrics["eval/l1"]
+                print(f"[action_ae_v2] eval step={step} l1={eval_l1:.6f}")
+                if eval_l1 < best_eval_l1:
+                    best_eval_l1 = eval_l1
+                    best_checkpoint_path = add_step_suffix(run_dir / "checkpoint_best.pt", step)
+                    best_encoder_path = add_step_suffix(run_dir / "encoder.pt", step)
+                    save_training_checkpoint(
+                        path=best_checkpoint_path,
+                        model=module,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        step=step,
+                        best_eval_l1=best_eval_l1,
+                        config=config,
+                    )
+                    save_encoder_checkpoint(
+                        path=best_encoder_path,
+                        encoder=module.encoder,
+                        config=ae_config,
+                        metadata={"step": step, "eval_l1": best_eval_l1, "run_name": run_name},
+                    )
+            distributed_barrier(distributed_state)
+
+        if step % save_every == 0 or step == max_steps:
+            if distributed_state.is_main_process:
+                latest_checkpoint_path = add_step_suffix(run_dir / "checkpoint_latest.pt", step)
                 save_training_checkpoint(
-                    path=best_checkpoint_path,
-                    model=model,
+                    path=latest_checkpoint_path,
+                    model=unwrap_model(model),
                     optimizer=optimizer,
                     scheduler=scheduler,
                     step=step,
                     best_eval_l1=best_eval_l1,
                     config=config,
                 )
-                save_encoder_checkpoint(
-                    path=best_encoder_path,
-                    encoder=model.encoder,
-                    config=ae_config,
-                    metadata={"step": step, "eval_l1": best_eval_l1, "run_name": run_name},
-                )
+            distributed_barrier(distributed_state)
 
-        if step % save_every == 0 or step == max_steps:
-            latest_checkpoint_path = add_step_suffix(run_dir / "checkpoint_latest.pt", step)
-            save_training_checkpoint(
-                path=latest_checkpoint_path,
-                model=model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                step=step,
-                best_eval_l1=best_eval_l1,
-                config=config,
-            )
-
-    if wandb_run is not None:
+    if distributed_state.is_main_process and wandb_run is not None:
         wandb_run.finish()
 
 
@@ -665,8 +767,9 @@ def main() -> None:
     model_cfg = config.setdefault("model", {})
     data_cfg = config.setdefault("data", {})
 
+    distributed_state = init_distributed_state(training_cfg.get("device"))
     seed = int(training_cfg.get("seed", 7))
-    set_seed(seed)
+    set_seed(seed + distributed_state.rank)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_name = run_cfg.get("run_name") or f"action_ae_libero_all_{timestamp}"
@@ -674,14 +777,22 @@ def main() -> None:
     run_dir = run_root_dir / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    with (run_dir / "config.yaml").open("w", encoding="utf-8") as f:
-        yaml.safe_dump(config, f, sort_keys=False)
+    if distributed_state.is_main_process:
+        with (run_dir / "config.yaml").open("w", encoding="utf-8") as f:
+            yaml.safe_dump(config, f, sort_keys=False)
 
-    wandb_run = init_wandb(config, run_name)
+    wandb_run = init_wandb(config, run_name) if distributed_state.is_main_process else None
 
     ae_version = str(model_cfg.get("ae_version", "v1")).lower()
     if ae_version == "v2":
-        train_v2(config=config, run_dir=run_dir, run_name=run_name, wandb_run=wandb_run)
+        train_v2(
+            config=config,
+            run_dir=run_dir,
+            run_name=run_name,
+            wandb_run=wandb_run,
+            distributed_state=distributed_state,
+        )
+        cleanup_distributed()
         return
     if ae_version != "v1":
         raise ValueError(f"Unsupported Action AE version: {ae_version!r}")
@@ -689,9 +800,9 @@ def main() -> None:
     action_ae_config = ActionAEConfig.from_dict(model_cfg)
     model = ActionTransformerAE(action_ae_config)
 
-    device_name = training_cfg.get("device") or ("cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device(device_name)
+    device = distributed_state.device
     model.to(device)
+    model = wrap_model_for_training(model, distributed_state)
 
     data_config = ActionDataConfig(
         data_root_dir=data_cfg.get("data_root_dir", "/data/kaixi/dataset/libero"),
@@ -706,7 +817,8 @@ def main() -> None:
         include_dataset_name=bool(data_cfg.get("include_dataset_name", True)),
     )
     train_iterable, eval_iterable, dataset_statistics = make_action_iterables(data_config)
-    save_json(run_dir / "dataset_statistics.json", dataset_statistics)
+    if distributed_state.is_main_process:
+        save_json(run_dir / "dataset_statistics.json", dataset_statistics)
 
     optimizer = AdamW(
         model.parameters(),
@@ -731,10 +843,13 @@ def main() -> None:
     train_iterator = iter(train_iterable)
     start_time = time.time()
 
-    print(f"[action_ae] run_dir: {run_dir}")
-    print(f"[action_ae] device: {device}")
-    print(f"[action_ae] max_steps: {max_steps}")
-    print(f"[action_ae] batch_size: {data_config.batch_size}")
+    if distributed_state.is_main_process:
+        print(f"[action_ae] run_dir: {run_dir}")
+        print(f"[action_ae] device: {device}")
+        print(f"[action_ae] distributed: world_size={distributed_state.world_size}")
+        print(f"[action_ae] max_steps: {max_steps}")
+        print(f"[action_ae] batch_size_per_rank: {data_config.batch_size}")
+        print(f"[action_ae] effective_batch_size: {data_config.batch_size * distributed_state.world_size}")
 
     for step in range(1, max_steps + 1):
         model.train()
@@ -761,59 +876,67 @@ def main() -> None:
                     "time/elapsed_sec": time.time() - start_time,
                 }
             )
-            append_jsonl(metrics_path, metrics)
-            if wandb_run is not None:
-                wandb_run.log(metrics, step=step)
-            print(f"[action_ae] step={step} loss={loss.item():.6f} lr={lr:.3e}")
+            metrics = reduce_metrics(metrics, device, distributed_state)
+            if distributed_state.is_main_process:
+                append_jsonl(metrics_path, metrics)
+                if wandb_run is not None:
+                    wandb_run.log(metrics, step=step)
+                print(f"[action_ae] step={step} loss={metrics['train/loss']:.6f} lr={lr:.3e}")
 
         if step % eval_every == 0 or step == max_steps:
-            eval_metrics = evaluate(
-                model=model,
-                eval_iterable=eval_iterable,
-                device=device,
-                max_batches=eval_batches,
-            )
-            eval_metrics["step"] = step
-            append_jsonl(metrics_path, eval_metrics)
-            if wandb_run is not None:
-                wandb_run.log(eval_metrics, step=step)
-            eval_l1 = eval_metrics["eval/l1"]
-            print(f"[action_ae] eval step={step} l1={eval_l1:.6f}")
+            if distributed_state.is_main_process:
+                module = unwrap_model(model)
+                eval_metrics = evaluate(
+                    model=module,
+                    eval_iterable=eval_iterable,
+                    device=device,
+                    max_batches=eval_batches,
+                )
+                eval_metrics["step"] = step
+                append_jsonl(metrics_path, eval_metrics)
+                if wandb_run is not None:
+                    wandb_run.log(eval_metrics, step=step)
+                eval_l1 = eval_metrics["eval/l1"]
+                print(f"[action_ae] eval step={step} l1={eval_l1:.6f}")
 
-            if eval_l1 < best_eval_l1:
-                best_eval_l1 = eval_l1
-                best_checkpoint_path = add_step_suffix(run_dir / "checkpoint_best.pt", step)
-                best_encoder_path = add_step_suffix(run_dir / "encoder.pt", step)
+                if eval_l1 < best_eval_l1:
+                    best_eval_l1 = eval_l1
+                    best_checkpoint_path = add_step_suffix(run_dir / "checkpoint_best.pt", step)
+                    best_encoder_path = add_step_suffix(run_dir / "encoder.pt", step)
+                    save_training_checkpoint(
+                        path=best_checkpoint_path,
+                        model=module,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        step=step,
+                        best_eval_l1=best_eval_l1,
+                        config=config,
+                    )
+                    save_encoder_checkpoint(
+                        path=best_encoder_path,
+                        encoder=module.encoder,
+                        config=action_ae_config,
+                        metadata={"step": step, "eval_l1": best_eval_l1, "run_name": run_name},
+                    )
+            distributed_barrier(distributed_state)
+
+        if step % save_every == 0 or step == max_steps:
+            if distributed_state.is_main_process:
+                latest_checkpoint_path = add_step_suffix(run_dir / "checkpoint_latest.pt", step)
                 save_training_checkpoint(
-                    path=best_checkpoint_path,
-                    model=model,
+                    path=latest_checkpoint_path,
+                    model=unwrap_model(model),
                     optimizer=optimizer,
                     scheduler=scheduler,
                     step=step,
                     best_eval_l1=best_eval_l1,
                     config=config,
                 )
-                save_encoder_checkpoint(
-                    path=best_encoder_path,
-                    encoder=model.encoder,
-                    config=action_ae_config,
-                    metadata={"step": step, "eval_l1": best_eval_l1, "run_name": run_name},
-                )
+            distributed_barrier(distributed_state)
 
-        if step % save_every == 0 or step == max_steps:
-            latest_checkpoint_path = add_step_suffix(run_dir / "checkpoint_latest.pt", step)
-            save_training_checkpoint(
-                path=latest_checkpoint_path,
-                model=model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                step=step,
-                best_eval_l1=best_eval_l1,
-                config=config,
-            )
-
-    if wandb_run is not None:
+    if distributed_state.is_main_process and wandb_run is not None:
         wandb_run.finish()
+    cleanup_distributed()
 
 
 if __name__ == "__main__":

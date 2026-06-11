@@ -11,10 +11,10 @@ set -euo pipefail
 
 # Choose one or several:
 # libero_spatial | libero_object | libero_goal | libero_10
-TASK_SUITES="${TASK_SUITES:-libero_object}"
+TASK_SUITES="${TASK_SUITES:-libero_spatial}"
 
-PRETRAINED_CHECKPOINT="${PRETRAINED_CHECKPOINT:-/umd-datapool/kaixi/PAIR/checkpoints/baseline_object_64}"
-GPU="${GPU:-0}"
+PRETRAINED_CHECKPOINT="${PRETRAINED_CHECKPOINT:-/umd-datapool/kaixi/PAIR/checkpoints/PAIR_spatial_AE_V2_init1_specialize}"
+GPU="${GPU:-7}"
 NUM_TRIALS_PER_TASK="${NUM_TRIALS_PER_TASK:-50}"
 SEED="${SEED:-7}"
 NUM_STEPS_WAIT="${NUM_STEPS_WAIT:-10}"

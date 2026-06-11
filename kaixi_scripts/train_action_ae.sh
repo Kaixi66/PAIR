@@ -4,37 +4,39 @@ set -euo pipefail
 # PAIR Action AE training launcher. Override values at launch, for example:
 #   MAX_STEPS=2 BATCH_SIZE=4 WANDB_MODE=disabled ./train_action_ae.sh
 #   AE_VERSION=conditioned LATENT_DIM=16 MASK_PROB=0.5 ./train_action_ae.sh
+#   DATASET_NAME=libero_spatial_no_noops GPUS=0,1 BATCH_SIZE=16 ./train_action_ae.sh
 
 #########################
 # User-facing settings
 #########################
 
 AE_VERSION="${AE_VERSION:-v2}"  # v1/action_only or v2/conditioned
-GPUS="${GPUS:-0}"
+DATASET_NAME="${DATASET_NAME:-libero_spatial_no_noops}" # libero_4_task_suites_no_noops
+GPUS="${GPUS:-0,1,2,3}"
 
-BATCH_SIZE="${BATCH_SIZE:-64}"
+BATCH_SIZE="${BATCH_SIZE:-8}"
 MAX_STEPS="${MAX_STEPS:-50000}"
 
 LEARNING_RATE="${LEARNING_RATE:-3e-4}"
 LOG_EVERY="${LOG_EVERY:-100}"
-EVAL_EVERY="${EVAL_EVERY:-2000}"
+EVAL_EVERY="${EVAL_EVERY:-1000}"
 SAVE_EVERY="${SAVE_EVERY:-50000}"
 EVAL_BATCHES="${EVAL_BATCHES:-20}"
 SEED="${SEED:-7}"
 LATENT_DIM="${LATENT_DIM:-16}"
 ENCODER_LAYERS="${ENCODER_LAYERS:-1}"
 PERCEPTION_LAYERS="${PERCEPTION_LAYERS:-1}"
-DECODER_LAYERS="${DECODER_LAYERS:-2}"
+DECODER_LAYERS="${DECODER_LAYERS:-1}"
 
 # Corruption settings. MASK_PROB is the probability of masking one action step in the 8-step chunk.
-MASK_PROB="${MASK_PROB:-0.3}"
+MASK_PROB="${MASK_PROB:-0.5}"
 NOISE_STD="${NOISE_STD:-0.05}"
 NUM_IMAGES_IN_INPUT="${NUM_IMAGES_IN_INPUT:-2}"
 
 WANDB_ENTITY="${WANDB_ENTITY:-kaixi-university-of-maryland}"
 WANDB_PROJECT="${WANDB_PROJECT:-PAIR}"
 export WANDB_MODE="${WANDB_MODE:-online}"
-EXP_NAME="${EXP_NAME:-conditioned_AE}"
+EXP_NAME="${EXP_NAME:-conditionedAE_en2_de1_spatial}"
 
 DRY_RUN="${DRY_RUN:-false}"
 BACKGROUND="${BACKGROUND:-false}"
@@ -45,6 +47,7 @@ BACKGROUND="${BACKGROUND:-false}"
 
 CONDA_ENV="${CONDA_ENV:-vla-adapter}"
 ACTIVATE_CONDA="${ACTIVATE_CONDA:-true}"
+NPROC_PER_NODE="${NPROC_PER_NODE:-auto}"
 
 PAIR_ROOT="${PAIR_ROOT:-/data/kaixi/PAIR}"
 ENV_SH="${ENV_SH:-${PAIR_ROOT}/kaixi_scripts/env.sh}"
@@ -65,6 +68,11 @@ EXTRA_ARGS="${EXTRA_ARGS:-}"
 ############################
 
 current_time="${CURRENT_TIME:-$(date +%Y%m%d_%H%M%S)}"
+gpu_list="${GPUS// /}"
+IFS=',' read -r -a gpu_array <<< "${gpu_list}"
+if [[ "${NPROC_PER_NODE}" == "auto" ]]; then
+    NPROC_PER_NODE="${#gpu_array[@]}"
+fi
 
 case "${AE_VERSION}" in
     v1|action_only|only_action)
@@ -90,9 +98,9 @@ fi
 
 if [[ -z "${EXP_NAME}" ]]; then
     if [[ "${AE_VERSION}" == "v2" ]]; then
-        EXP_NAME="ae_v2_perception_libero_all_${current_time}"
+        EXP_NAME="ae_v2_${DATASET_NAME}_en${ENCODER_LAYERS}_pe${PERCEPTION_LAYERS}_de${DECODER_LAYERS}_${current_time}"
     else
-        EXP_NAME="ae_libero_1"
+        EXP_NAME="ae_v1_${DATASET_NAME}_${current_time}"
     fi
 fi
 log_file="${LOG_FILE:-${LOG_DIR}/ActionAE--${EXP_NAME}.log}"
@@ -116,12 +124,11 @@ export PYTHONUNBUFFERED=1
 
 python_bin="${PAIR_PYTHON:-python}"
 
-cmd=(
-    "${python_bin}"
-    -m pair_action_ae.train
+train_args=(
     --config "${CONFIG_PATH}"
     --ae_version "${AE_VERSION}"
     --data_root_dir "${DATA_ROOT_DIR}"
+    --mixture "${DATASET_NAME}"
     --run_root_dir "${RUN_ROOT_DIR}"
     --run_name "${EXP_NAME}"
     --batch_size "${BATCH_SIZE}"
@@ -138,11 +145,11 @@ cmd=(
 )
 
 if [[ -n "${LATENT_DIM}" ]]; then
-    cmd+=(--latent_dim "${LATENT_DIM}")
+    train_args+=(--latent_dim "${LATENT_DIM}")
 fi
 
 if [[ "${AE_VERSION}" == "v2" ]]; then
-    cmd+=(
+    train_args+=(
         --vlm_path "${VLA_PATH}"
         --vla_config_file_path "${VLA_CONFIG_FILE_PATH}"
         --num_images_in_input "${NUM_IMAGES_IN_INPUT}"
@@ -157,15 +164,36 @@ fi
 if [[ -n "${EXTRA_ARGS}" ]]; then
     # shellcheck disable=SC2206
     extra_args_array=(${EXTRA_ARGS})
-    cmd+=("${extra_args_array[@]}")
+    train_args+=("${extra_args_array[@]}")
+fi
+
+if (( NPROC_PER_NODE > 1 )); then
+    cmd=(
+        "${python_bin}"
+        -m torch.distributed.run
+        --standalone
+        --nnodes 1
+        --nproc_per_node "${NPROC_PER_NODE}"
+        --module pair_action_ae.train
+        "${train_args[@]}"
+    )
+else
+    cmd=(
+        "${python_bin}"
+        -m pair_action_ae.train
+        "${train_args[@]}"
+    )
 fi
 
 cat <<EOF
 [train_action_ae] ae_version: ${AE_VERSION}
+[train_action_ae] dataset_name: ${DATASET_NAME}
 [train_action_ae] config: ${CONFIG_PATH}
 [train_action_ae] data_root: ${DATA_ROOT_DIR}
 [train_action_ae] gpus: ${CUDA_VISIBLE_DEVICES}
-[train_action_ae] batch_size: ${BATCH_SIZE}
+[train_action_ae] nproc_per_node: ${NPROC_PER_NODE}
+[train_action_ae] batch_size_per_rank: ${BATCH_SIZE}
+[train_action_ae] effective_batch_size: $(( BATCH_SIZE * NPROC_PER_NODE ))
 [train_action_ae] max_steps: ${MAX_STEPS}
 [train_action_ae] learning_rate: ${LEARNING_RATE}
 [train_action_ae] latent_dim_override: ${LATENT_DIM:-config default}
