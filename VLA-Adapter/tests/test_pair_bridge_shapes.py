@@ -25,10 +25,18 @@ def test_pair_bridge_shapes_and_gate_init(tmp_path: Path):
     assert torch.allclose(output.init_gate, torch.full((2, 8), config.init_gate_value))
     assert not torch.allclose(output.action_init, base_init)
     assert "slot_bias" not in dict(bridge.named_parameters())
+    assert bridge.config.init_from_latent
+    assert bridge.latent_proj is not None
+    assert bridge.latent_to_step_init is not None
+    assert bridge.align_proj is None
+    assert bridge.init_proj is None
     assert bridge.config.init_gate_granularity == "per_step"
     assert bridge.config.input_dependent_gate
     assert "init_gate" not in dict(bridge.named_parameters())
-    assert dict(bridge.named_parameters())["gate_proj.weight"].shape == (1, 512)
+    assert dict(bridge.named_parameters())["latent_proj.weight"].shape == (16, 512)
+    assert dict(bridge.named_parameters())["latent_to_step_init.1.weight"].shape == (512, 16)
+    assert dict(bridge.named_parameters())["latent_to_step_init.3.weight"].shape == (4096, 512)
+    assert dict(bridge.named_parameters())["gate_proj.weight"].shape == (1, 16)
     assert torch.count_nonzero(bridge.gate_proj.weight) == 0
     expected_bias = torch.logit(torch.tensor(config.init_gate_value))
     assert torch.allclose(bridge.gate_proj.bias, expected_bias.reshape(1))
@@ -50,6 +58,19 @@ def test_pair_bridge_shapes_and_gate_init(tmp_path: Path):
     assert loaded_output.action_init.shape == (2, 56, 4096)
     assert loaded_output.z_align.shape == (2, 8, 16)
     assert loaded_output.init_gate.shape == (2, 8)
+
+
+def test_pair_bridge_action_init_path_uses_latent_projection():
+    config = PairBridgeConfig(llm_dim=64, bridge_dim=32, latent_dim=8, horizon=8, action_dim=7, num_heads=4)
+    bridge = PairBridge(config)
+    perception_tokens = torch.randn(2, 6, 64)
+    base_init = torch.zeros(2, 56, 64)
+
+    output = bridge(perception_tokens, base_init)
+    output.action_init_delta.float().sum().backward()
+
+    assert bridge.latent_proj.weight.grad is not None
+    assert bridge.latent_proj.weight.grad.abs().sum() > 0
 
 
 def test_pair_bridge_fixed_gate_mode():
@@ -190,11 +211,16 @@ def test_pair_bridge_legacy_config_disables_mlp():
     bridge = PairBridge(config)
 
     assert bridge.config.bridge_mlp_dim == 0
+    assert not bridge.config.init_from_latent
     assert bridge.config.init_gate_granularity == "scalar"
     assert not bridge.config.input_dependent_gate
     assert bridge.config.gate_activation == "tanh"
     assert not bridge.config.init_gate_value_is_actual
     assert bridge.bridge_mlp is None
+    assert bridge.latent_proj is None
+    assert bridge.latent_to_step_init is None
+    assert bridge.align_proj is not None
+    assert bridge.init_proj is not None
     assert "init_gate" in dict(bridge.named_parameters())
 
 
