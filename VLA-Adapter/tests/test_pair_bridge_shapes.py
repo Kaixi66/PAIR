@@ -36,7 +36,7 @@ def test_pair_bridge_shapes_and_gate_init(tmp_path: Path):
     assert dict(bridge.named_parameters())["latent_proj.weight"].shape == (16, 512)
     assert dict(bridge.named_parameters())["latent_to_step_init.1.weight"].shape == (512, 16)
     assert dict(bridge.named_parameters())["latent_to_step_init.3.weight"].shape == (4096, 512)
-    assert dict(bridge.named_parameters())["gate_proj.weight"].shape == (1, 16)
+    assert dict(bridge.named_parameters())["gate_proj.weight"].shape == (1, 512)
     assert torch.count_nonzero(bridge.gate_proj.weight) == 0
     expected_bias = torch.logit(torch.tensor(config.init_gate_value))
     assert torch.allclose(bridge.gate_proj.bias, expected_bias.reshape(1))

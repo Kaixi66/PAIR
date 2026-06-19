@@ -112,9 +112,8 @@ class PairBridge(nn.Module):
             and self.config.init_gate_granularity == "per_step"
         )
         if self.uses_input_dependent_gate:
-            gate_input_dim = self.config.latent_dim if self.config.init_from_latent else self.config.bridge_dim
-            self.gate_norm = nn.LayerNorm(gate_input_dim)
-            self.gate_proj = nn.Linear(gate_input_dim, 1, bias=True)
+            self.gate_norm = nn.LayerNorm(self.config.bridge_dim)
+            self.gate_proj = nn.Linear(self.config.bridge_dim, 1, bias=True)
         else:
             self.gate_norm = None
             self.gate_proj = None
@@ -233,15 +232,13 @@ class PairBridge(nn.Module):
         if self.config.init_from_latent:
             z_align = self.latent_proj(bridge_tokens)
             step_init = self.latent_to_step_init(z_align)
-            gate_source = z_align
         else:
             z_align = self.align_proj(bridge_tokens)
             step_init = self.init_proj(bridge_tokens)
-            gate_source = bridge_tokens
         per_dim_init = step_init.unsqueeze(2) * self.slot_scale.to(dtype=step_init.dtype).unsqueeze(0).unsqueeze(0)
         action_init_delta = per_dim_init.reshape(batch_size, expected_slots, self.config.llm_dim)
         if self.uses_input_dependent_gate:
-            gate_raw = self.gate_proj(self.gate_norm(gate_source.float())).squeeze(-1)
+            gate_raw = self.gate_proj(self.gate_norm(bridge_tokens.float())).squeeze(-1)
             gate = self._activate_gate(gate_raw).to(dtype=base_action_init.dtype)
             gated_delta = (
                 gate.view(batch_size, self.config.horizon, 1, 1)
