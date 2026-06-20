@@ -20,23 +20,23 @@ SAVE_FREQ="${SAVE_FREQ:-50000}"
 SAVE_LATEST_CHECKPOINT_ONLY="${SAVE_LATEST_CHECKPOINT_ONLY:-True}"
 USE_PRO_VERSION="${USE_PRO_VERSION:-False}"
 
-PAIR_ALIGN_WEIGHT="${PAIR_ALIGN_WEIGHT:-0.1}"
+PAIR_ALIGN_WEIGHT="${PAIR_ALIGN_WEIGHT:-0.01}"
 PAIR_BRIDGE_DIM="${PAIR_BRIDGE_DIM:-512}"
 
-PAIR_INIT_GATE_MODE="${PAIR_INIT_GATE_MODE:-fixed}" # learnable
-PAIR_INIT_GATE_VALUE="${PAIR_INIT_GATE_VALUE:-1}"
+PAIR_INIT_GATE_MODE="${PAIR_INIT_GATE_MODE:-learnable}" # learnable  fixed
+PAIR_INIT_GATE_VALUE="${PAIR_INIT_GATE_VALUE:-0}"
 PAIR_INIT_GATE_GRANULARITY="${PAIR_INIT_GATE_GRANULARITY:-per_step}"
 PAIR_GATE_ACTIVATION="${PAIR_GATE_ACTIVATION:-tanh}"
 PAIR_LOG_DEBUG_METRICS="${PAIR_LOG_DEBUG_METRICS:-True}"
 
-PAIR_ACTION_AE_ENCODER_PATH="${PAIR_ACTION_AE_ENCODER_PATH:-/umd-datapool/kaixi/PAIR/action_ae_runs/conditionedAE_en2_de1_spatial/encoder_50000-steps.pt}"
+PAIR_ACTION_AE_ENCODER_PATH="${PAIR_ACTION_AE_ENCODER_PATH:-/umd-datapool/kaixi/PAIR/action_ae_runs/conditionedAE_en2_de1/encoder_9000-steps.pt}"
 # /umd-datapool/kaixi/PAIR/action_ae_runs/conditionedAE_en2_de1/encoder_9000-steps.pt
 # /umd-datapool/kaixi/PAIR/action_ae_runs/conditionedAE_en2_de1_spatial/encoder_50000-steps.pt
 
 WANDB_ENTITY="${WANDB_ENTITY:-kaixi-university-of-maryland}"
 WANDB_PROJECT="${WANDB_PROJECT:-PAIR}"
 export WANDB_MODE="${WANDB_MODE:-online}"
-EXP_NAME="${EXP_NAME:-PAIR_spatial_AE_V2_init1_specialize}"
+EXP_NAME="${EXP_NAME:-l20_PAIR_v4_init0_0.01w_mixed_spatial}"
 
 DRY_RUN="${DRY_RUN:-false}"
 BACKGROUND="${BACKGROUND:-false}"

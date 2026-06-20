@@ -22,7 +22,6 @@ class PairBridgeConfig:
     num_heads: int = 8
     dropout: float = 0.0
     bridge_mlp_dim: int = 1024
-    init_from_latent: bool = True
     init_gate_mode: str = "learnable"
     init_gate_value: float = 0.05
     init_gate_granularity: str = "per_step"
@@ -35,21 +34,8 @@ class PairBridgeConfig:
 
     @classmethod
     def from_dict(cls, data: Dict[str, object]) -> "PairBridgeConfig":
-        is_legacy_gate_config = "gate_activation" not in data
         allowed = set(cls.__dataclass_fields__.keys())
         values = {key: value for key, value in data.items() if key in allowed}
-        if "bridge_mlp_dim" not in values:
-            values["bridge_mlp_dim"] = 0
-        if "init_from_latent" not in values:
-            values["init_from_latent"] = False
-        if "init_gate_granularity" not in values:
-            values["init_gate_granularity"] = "scalar"
-        if "input_dependent_gate" not in values:
-            values["input_dependent_gate"] = False
-        if "gate_activation" not in values:
-            values["gate_activation"] = "tanh"
-        if "init_gate_value_is_actual" not in values:
-            values["init_gate_value_is_actual"] = not is_legacy_gate_config
         return cls(**values)
 
 
@@ -89,21 +75,18 @@ class PairBridge(nn.Module):
         else:
             self.bridge_mlp_norm = None
             self.bridge_mlp = None
-        if self.config.init_from_latent:
-            self.latent_proj = nn.Linear(self.config.bridge_dim, self.config.latent_dim, bias=True)
-            self.latent_to_step_init = nn.Sequential(
-                nn.LayerNorm(self.config.latent_dim),
-                nn.Linear(self.config.latent_dim, self.config.bridge_dim, bias=True),
-                nn.GELU(),
-                nn.Linear(self.config.bridge_dim, self.config.llm_dim, bias=True),
-            )
-            self.align_proj = None
-            self.init_proj = None
-        else:
-            self.latent_proj = None
-            self.latent_to_step_init = None
-            self.align_proj = nn.Linear(self.config.bridge_dim, self.config.latent_dim, bias=True)
-            self.init_proj = nn.Linear(self.config.bridge_dim, self.config.llm_dim, bias=True)
+        self.align_proj = nn.Sequential(
+            nn.LayerNorm(self.config.bridge_dim),
+            nn.Linear(self.config.bridge_dim, self.config.bridge_dim, bias=True),
+            nn.GELU(),
+            nn.Linear(self.config.bridge_dim, self.config.latent_dim, bias=True),
+        )
+        self.init_proj = nn.Sequential(
+            nn.LayerNorm(self.config.bridge_dim),
+            nn.Linear(self.config.bridge_dim, self.config.bridge_dim, bias=True),
+            nn.GELU(),
+            nn.Linear(self.config.bridge_dim, self.config.llm_dim, bias=True),
+        )
 
         self.slot_scale = nn.Parameter(torch.ones(self.config.action_dim, self.config.llm_dim))
         self.uses_input_dependent_gate = (
@@ -229,12 +212,8 @@ class PairBridge(nn.Module):
         if self.bridge_mlp is not None:
             bridge_tokens = bridge_tokens + self.bridge_mlp(self.bridge_mlp_norm(bridge_tokens))
 
-        if self.config.init_from_latent:
-            z_align = self.latent_proj(bridge_tokens)
-            step_init = self.latent_to_step_init(z_align)
-        else:
-            z_align = self.align_proj(bridge_tokens)
-            step_init = self.init_proj(bridge_tokens)
+        z_align = self.align_proj(bridge_tokens)
+        step_init = self.init_proj(bridge_tokens)
         per_dim_init = step_init.unsqueeze(2) * self.slot_scale.to(dtype=step_init.dtype).unsqueeze(0).unsqueeze(0)
         action_init_delta = per_dim_init.reshape(batch_size, expected_slots, self.config.llm_dim)
         if self.uses_input_dependent_gate:
@@ -307,10 +286,7 @@ def load_pair_bridge_checkpoint(path: str | Path, map_location: str | torch.devi
     payload = torch.load(path, map_location=map_location)
     config = PairBridgeConfig.from_dict(payload["model_config"])
     model = PairBridge(config)
-    state_dict = dict(payload["state_dict"])
-    state_dict.pop("slot_bias", None)
-    state_dict.pop("module.slot_bias", None)
-    model.load_state_dict(state_dict)
+    model.load_state_dict(payload["state_dict"])
     model.eval()
     return model
 
