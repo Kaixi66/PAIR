@@ -7,7 +7,6 @@ Implementations of various action heads, which serve as alternatives to VLM sequ
 import math
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from prismatic.vla.constants import ACTION_DIM, ACTION_TOKEN_BEGIN_IDX, IGNORE_INDEX, NUM_ACTIONS_CHUNK, PROPRIO_DIM, STOP_INDEX, NUM_TOKENS
 
 
@@ -75,18 +74,23 @@ class L1RegressionActionHead(nn.Module):
         ).detach()
         pair_init_hidden_states = None
         if initial_action_states is not None:
-            expected_shape = (batch_size, self.action_dim * NUM_ACTIONS_CHUNK, self.hidden_dim)
-            if tuple(initial_action_states.shape) != expected_shape:
-                raise ValueError(
-                    f"Expected initial_action_states with shape {expected_shape}, "
-                    f"got {tuple(initial_action_states.shape)}"
-                )
             if initial_action_gate is None:
+                expected_shape = (batch_size, self.action_dim * NUM_ACTIONS_CHUNK, self.hidden_dim)
+                if tuple(initial_action_states.shape) != expected_shape:
+                    raise ValueError(
+                        f"Expected raw initial_action_states with shape {expected_shape}, "
+                        f"got {tuple(initial_action_states.shape)}"
+                    )
                 # Backward-compatible path: use the provided states as the raw action-head input.
                 cond_actions_hidden_states = initial_action_states.to(device=device, dtype=actions_hidden_states.dtype)
             else:
-                # PAIR path: inject this branch after layer_norm1 + fc1 so the scalar gate is not
-                # immediately normalized away by the action-head input LayerNorm.
+                expected_shape = (batch_size, NUM_ACTIONS_CHUNK, self.hidden_dim)
+                if tuple(initial_action_states.shape) != expected_shape:
+                    raise ValueError(
+                        f"Expected post-stem initial_action_states with shape {expected_shape}, "
+                        f"got {tuple(initial_action_states.shape)}"
+                    )
+                # PAIR path: inject a post-ReLU stem hidden before the action-head blocks.
                 pair_init_hidden_states = initial_action_states.to(device=device, dtype=actions_hidden_states.dtype)
 
         rearranged_actions_hidden_states = cond_actions_hidden_states.reshape(
@@ -94,7 +98,7 @@ class L1RegressionActionHead(nn.Module):
         )  # (batch, chunk_len, action_dim * hidden_dim)
         pair_rearranged_action_states = None
         if pair_init_hidden_states is not None:
-            pair_rearranged_action_states = pair_init_hidden_states.reshape(batch_size, NUM_ACTIONS_CHUNK, -1)
+            pair_rearranged_action_states = pair_init_hidden_states
 
         if phase == "Training":
             batch_size, seq_len, dim = rearranged_actions_hidden_states.shape
@@ -145,9 +149,9 @@ class MLPResNet(nn.Module):
         # x: (batch_size, input_dim)
         x = self.layer_norm1(x)  # shape: (batch_size, input_dim)
         x = self.fc1(x)  # shape: (batch_size, hidden_dim)
+        x = self.relu(x)  # shape: (batch_size, hidden_dim)
         if pair_init is not None:
-            pair_x = self.layer_norm1(pair_init)
-            pair_x = F.linear(pair_x, self.fc1.weight, bias=None)
+            pair_x = pair_init.to(device=x.device, dtype=x.dtype)
             gate = pair_gate.to(device=x.device, dtype=x.dtype) if torch.is_tensor(pair_gate) else x.new_tensor(pair_gate)
             if gate.ndim == 1:
                 if gate.shape[0] != x.shape[1]:
@@ -160,7 +164,6 @@ class MLPResNet(nn.Module):
             elif gate.ndim != 0:
                 raise ValueError(f"Expected scalar, per-step, or batched per-step pair gate, got shape {gate.shape}")
             x = x + gate * pair_x
-        x = self.relu(x)  # shape: (batch_size, hidden_dim)
         for i, block in enumerate(self.mlp_resnet_blocks):
             x = block(x, h_t = h_t[:,i+1,:], h_a = h_a[:,i+1,:], p=p)  # shape: (batch_size, hidden_dim)
         x = self.layer_norm2(x)  # shape: (batch_size, hidden_dim)

@@ -13,6 +13,7 @@ GPUS="${GPUS:-0,1,2,3,4,5,6,7}"
 BATCH_SIZE="${BATCH_SIZE:-8}"
 GRAD_ACCUMULATION_STEPS="${GRAD_ACCUMULATION_STEPS:-1}"
 LEARNING_RATE="${LEARNING_RATE:-2e-4}"
+WEIGHT_DECAY="${WEIGHT_DECAY:-1e-4}"
 LORA_RANK="${LORA_RANK:-64}"
 MAX_STEPS="${MAX_STEPS:-50005}"
 NUM_STEPS_BEFORE_DECAY="${NUM_STEPS_BEFORE_DECAY:-50000}"
@@ -20,8 +21,9 @@ SAVE_FREQ="${SAVE_FREQ:-50000}"
 SAVE_LATEST_CHECKPOINT_ONLY="${SAVE_LATEST_CHECKPOINT_ONLY:-True}"
 USE_PRO_VERSION="${USE_PRO_VERSION:-False}"
 
-PAIR_ALIGN_WEIGHT="${PAIR_ALIGN_WEIGHT:-0.01}"
-PAIR_BRIDGE_DIM="${PAIR_BRIDGE_DIM:-512}"
+PAIR_ALIGN_WEIGHT="${PAIR_ALIGN_WEIGHT:-0.1}"
+PAIR_BRIDGE_DIM="${PAIR_BRIDGE_DIM:-896}"
+PAIR_GATE_MLP_DIM="${PAIR_GATE_MLP_DIM:-256}"
 
 PAIR_INIT_GATE_MODE="${PAIR_INIT_GATE_MODE:-learnable}" # learnable  fixed
 PAIR_INIT_GATE_VALUE="${PAIR_INIT_GATE_VALUE:-0}"
@@ -29,14 +31,14 @@ PAIR_INIT_GATE_GRANULARITY="${PAIR_INIT_GATE_GRANULARITY:-per_step}"
 PAIR_GATE_ACTIVATION="${PAIR_GATE_ACTIVATION:-tanh}"
 PAIR_LOG_DEBUG_METRICS="${PAIR_LOG_DEBUG_METRICS:-True}"
 
-PAIR_ACTION_AE_ENCODER_PATH="${PAIR_ACTION_AE_ENCODER_PATH:-/umd-datapool/kaixi/PAIR/action_ae_runs/conditionedAE_en2_de1/encoder_9000-steps.pt}"
+PAIR_ACTION_AE_ENCODER_PATH="${PAIR_ACTION_AE_ENCODER_PATH:-/umd-datapool/kaixi/PAIR/action_ae_runs/conditionedAE_en2_de1_spatial/encoder_50000-steps.pt}"
 # /umd-datapool/kaixi/PAIR/action_ae_runs/conditionedAE_en2_de1/encoder_9000-steps.pt
 # /umd-datapool/kaixi/PAIR/action_ae_runs/conditionedAE_en2_de1_spatial/encoder_50000-steps.pt
 
 WANDB_ENTITY="${WANDB_ENTITY:-kaixi-university-of-maryland}"
 WANDB_PROJECT="${WANDB_PROJECT:-PAIR}"
 export WANDB_MODE="${WANDB_MODE:-online}"
-EXP_NAME="${EXP_NAME:-l20_PAIR_v4_init0_0.01w_mixed_spatial}"
+EXP_NAME="${EXP_NAME:-l20_PAIR_v7_learnable0_specialize_spatial}"
 
 DRY_RUN="${DRY_RUN:-false}"
 BACKGROUND="${BACKGROUND:-false}"
@@ -147,6 +149,7 @@ cmd=(
     --batch_size "${BATCH_SIZE}"
     --grad_accumulation_steps "${GRAD_ACCUMULATION_STEPS}"
     --learning_rate "${LEARNING_RATE}"
+    --weight_decay "${WEIGHT_DECAY}"
     --lora_rank "${LORA_RANK}"
     --use_pro_version "${USE_PRO_VERSION}"
     --use_val_set "${USE_VAL_SET}"
@@ -160,6 +163,7 @@ cmd=(
     --pair_action_ae_encoder_path "${PAIR_ACTION_AE_ENCODER_PATH}"
     --pair_align_weight "${PAIR_ALIGN_WEIGHT}"
     --pair_bridge_dim "${PAIR_BRIDGE_DIM}"
+    --pair_gate_mlp_dim "${PAIR_GATE_MLP_DIM}"
     --pair_init_gate_mode "${PAIR_INIT_GATE_MODE}"
     --pair_init_gate_value "${PAIR_INIT_GATE_VALUE}"
     --pair_init_gate_granularity "${PAIR_INIT_GATE_GRANULARITY}"
@@ -179,11 +183,13 @@ cat <<EOF
 [train_pair_bridge] gpus: ${CUDA_VISIBLE_DEVICES}
 [train_pair_bridge] nproc_per_node: ${NPROC_PER_NODE}
 [train_pair_bridge] effective_batch: $((NPROC_PER_NODE * BATCH_SIZE * GRAD_ACCUMULATION_STEPS))
+[train_pair_bridge] weight_decay: ${WEIGHT_DECAY} (bias/norm/gate no-decay)
 [train_pair_bridge] python: ${python_bin}
 [train_pair_bridge] torchrun: ${torchrun_bin}
 [train_pair_bridge] action_ae_dir: ${ACTION_AE_DIR}
 [train_pair_bridge] action_ae_encoder: ${PAIR_ACTION_AE_ENCODER_PATH}
 [train_pair_bridge] pair_align_weight: ${PAIR_ALIGN_WEIGHT}
+[train_pair_bridge] pair_dims: bridge=${PAIR_BRIDGE_DIM}, block_mlp=4x_bridge, init_mlp=4x_bridge, gate_mlp=${PAIR_GATE_MLP_DIM}
 [train_pair_bridge] pair_init_gate: mode=${PAIR_INIT_GATE_MODE}, actual_value=${PAIR_INIT_GATE_VALUE}, granularity=${PAIR_INIT_GATE_GRANULARITY}, activation=${PAIR_GATE_ACTIVATION}
 [train_pair_bridge] pair_log_debug_metrics: ${PAIR_LOG_DEBUG_METRICS}
 [train_pair_bridge] wandb: ${WANDB_ENTITY}/${WANDB_PROJECT} (${WANDB_MODE})

@@ -24,6 +24,7 @@ from prismatic.training.train_utils import (
     get_current_action_mask,
     get_next_actions_mask,
 )
+from prismatic.models.pair_bridge import build_pair_perception_tokens
 from prismatic.vla.constants import (
     ACTION_DIM,
     ACTION_PROPRIO_NORMALIZATION_TYPE,
@@ -868,24 +869,14 @@ class OpenVLAForActionPrediction(PrismaticForConditionalGeneration):
         initial_action_gate = None
         if pair_bridge is not None:
             hidden0 = language_model_output.hidden_states[0]
-            vision_tokens = hidden0[:, :NUM_PATCHES, :]
-            prompt_tokens = hidden0[:, NUM_PATCHES : NUM_PATCHES + NUM_PROMPT_TOKENS, :]
-            perception_tokens = torch.cat([vision_tokens, prompt_tokens], dim=1)
-            perception_mask = torch.ones(
-                perception_tokens.shape[:2],
-                dtype=torch.bool,
-                device=perception_tokens.device,
-            )
-            base_action_init = torch.zeros(
-                hidden0.shape[0],
-                ACTION_DIM * NUM_ACTIONS_CHUNK,
-                self.llm_dim,
-                dtype=hidden0.dtype,
-                device=hidden0.device,
+            perception_tokens, perception_mask = build_pair_perception_tokens(
+                hidden_state=hidden0,
+                num_patches=NUM_PATCHES,
+                attention_mask=attention_mask,
+                num_prompt_tokens=NUM_PROMPT_TOKENS,
             )
             pair_output = pair_bridge(
                 perception_tokens=perception_tokens,
-                base_action_init=base_action_init,
                 perception_mask=perception_mask,
             )
             initial_action_states = pair_output.action_init_delta

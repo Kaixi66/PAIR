@@ -64,6 +64,7 @@ try:
     from prismatic.models.pair_bridge import (
         PairBridge,
         PairBridgeConfig,
+        build_pair_perception_tokens,
         cosine_alignment_loss,
         load_frozen_action_encoder,
         save_pair_bridge_checkpoint,
@@ -71,6 +72,7 @@ try:
 except ImportError:
     PairBridge = None
     PairBridgeConfig = None
+    build_pair_perception_tokens = None
     cosine_alignment_loss = None
     load_frozen_action_encoder = None
     save_pair_bridge_checkpoint = None
@@ -106,6 +108,7 @@ class FinetuneConfig:
     # Training configuration
     batch_size: int = 8                              # Batch size per device (total batch size = batch_size * num GPUs)
     learning_rate: float = 5e-4                      # Learning rate
+    weight_decay: float = 1e-4                       # AdamW weight decay for non-bias/non-norm/non-gate parameters
     lr_warmup_steps: int = 0.1                       # Number of steps to warm up learning rate (from 10% to 100%)
     num_steps_before_decay: int = 100000             # Number of steps before LR decays by 10x
     grad_accumulation_steps: int = 1                 # Number of gradient accumulation steps
@@ -148,6 +151,7 @@ class FinetuneConfig:
     pair_action_ae_encoder_path: str = "/umd-datapool/kaixi/PAIR/action_ae_runs/ae_libero_1/encoder.pt"
     pair_align_weight: float = 0.05
     pair_bridge_dim: int = 512
+    pair_gate_mlp_dim: int = 256
     pair_init_gate_mode: str = "learnable"
     pair_init_gate_value: float = 0.05
     pair_init_gate_granularity: str = "per_step"
@@ -180,6 +184,42 @@ def remove_ddp_in_checkpoint(state_dict) -> dict:
         else:
             new_state_dict[k] = v
     return new_state_dict
+
+
+NO_WEIGHT_DECAY_KEYWORDS = ("bias", "norm", "gate")
+
+
+def use_weight_decay_for_param(param_name: str) -> bool:
+    lower_name = param_name.lower()
+    return not any(keyword in lower_name for keyword in NO_WEIGHT_DECAY_KEYWORDS)
+
+
+def add_optimizer_param_groups(
+    param_groups: list,
+    module: nn.Module,
+    module_name: str,
+    learning_rate: float,
+    weight_decay: float,
+) -> Tuple[int, int]:
+    decay_params = []
+    no_decay_params = []
+
+    for name, param in module.named_parameters():
+        if not param.requires_grad:
+            continue
+
+        full_name = f"{module_name}.{name}"
+        if use_weight_decay_for_param(full_name):
+            decay_params.append(param)
+        else:
+            no_decay_params.append(param)
+
+    if decay_params:
+        param_groups.append({"params": decay_params, "lr": learning_rate, "weight_decay": weight_decay})
+    if no_decay_params:
+        param_groups.append({"params": no_decay_params, "lr": learning_rate, "weight_decay": 0.0})
+
+    return sum(p.numel() for p in decay_params), sum(p.numel() for p in no_decay_params)
 
 
 
@@ -339,38 +379,6 @@ def require_pair_bridge_imports() -> None:
         )
 
 
-def build_pair_perception_tokens(
-    *,
-    hidden_state: torch.Tensor,
-    labels: torch.Tensor,
-    attention_mask: torch.Tensor,
-    num_patches: int,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Build `[V0; T0]` from initial multimodal hidden states without action-token states."""
-    vision_tokens = hidden_state[:, :num_patches, :]
-    text_tokens = hidden_state[:, num_patches:-1, :]
-
-    text_labels = labels[:, 1:].to(hidden_state.device)
-    text_attention_mask = attention_mask[:, 1:].to(hidden_state.device)
-    min_len = min(text_tokens.shape[1], text_labels.shape[1], text_attention_mask.shape[1])
-    text_tokens = text_tokens[:, :min_len, :]
-    text_labels = text_labels[:, :min_len]
-    text_attention_mask = text_attention_mask[:, :min_len]
-
-    action_mask = get_current_action_mask(text_labels) | get_next_actions_mask(text_labels)
-    prompt_mask = text_attention_mask.bool() & (text_labels == IGNORE_INDEX) & ~action_mask
-
-    perception_tokens = torch.cat([vision_tokens, text_tokens], dim=1)
-    vision_mask = torch.ones(
-        vision_tokens.shape[:2],
-        dtype=torch.bool,
-        device=hidden_state.device,
-    )
-    perception_mask = torch.cat([vision_mask, prompt_mask], dim=1)
-    return perception_tokens, perception_mask
-
-
-
 def run_forward_pass(
     vla,
     action_head,
@@ -513,16 +521,8 @@ def run_forward_pass(
                 attention_mask=batch["attention_mask"],
                 num_patches=num_patches,
             )
-            base_action_init = torch.zeros(
-                batch_size,
-                ACTION_DIM * NUM_ACTIONS_CHUNK,
-                action_head.module.hidden_dim,
-                device=device_id,
-                dtype=perception_tokens.dtype,
-            )
             pair_output = pair_bridge(
                 perception_tokens=perception_tokens,
-                base_action_init=base_action_init,
                 perception_mask=perception_mask,
             )
             initial_action_states = pair_output.action_init_delta
@@ -564,19 +564,13 @@ def run_forward_pass(
         )
         if pair_align_loss is not None:
             pair_delta = pair_output.action_init_delta.detach().float()
-            pair_delta = pair_delta.reshape(
-                pair_delta.shape[0],
-                pair_output.z_align.shape[1],
-                ACTION_DIM,
-                pair_delta.shape[-1],
-            )
             pair_delta_norm = pair_delta.norm(dim=-1)
             if pair_init_gate.ndim == 0:
-                pair_effective_delta_norm = (pair_init_gate.abs().view(1, 1, 1) * pair_delta_norm).mean()
+                pair_effective_delta_norm = (pair_init_gate.abs() * pair_delta_norm).mean()
             elif pair_init_gate.ndim == 1:
-                pair_effective_delta_norm = (pair_init_gate.abs().view(1, -1, 1) * pair_delta_norm).mean()
+                pair_effective_delta_norm = (pair_init_gate.abs().view(1, -1) * pair_delta_norm).mean()
             else:
-                pair_effective_delta_norm = (pair_init_gate.abs().unsqueeze(-1) * pair_delta_norm).mean()
+                pair_effective_delta_norm = (pair_init_gate.abs() * pair_delta_norm).mean()
             pair_init_gate_values = pair_init_gate.reshape(-1)
             pair_metrics = {
                 "pair/align_loss": pair_align_loss.item(),
@@ -1163,6 +1157,7 @@ def finetune(cfg: FinetuneConfig) -> None:
             latent_dim=pair_latent_dim,
             horizon=NUM_ACTIONS_CHUNK,
             action_dim=ACTION_DIM,
+            gate_mlp_dim=cfg.pair_gate_mlp_dim,
             init_gate_mode=cfg.pair_init_gate_mode,
             init_gate_value=cfg.pair_init_gate_value,
             init_gate_granularity=cfg.pair_init_gate_granularity,
@@ -1185,18 +1180,45 @@ def finetune(cfg: FinetuneConfig) -> None:
     NUM_PATCHES = vla.module.vision_backbone.get_num_patches() * vla.module.vision_backbone.get_num_images_in_input()
     # If we have proprio inputs, a single proprio embedding is appended to the end of the vision patch embeddings
 
-    # Instantiate optimizer
-    trainable_params = [param for param in vla.parameters() if param.requires_grad]
+    # Instantiate optimizer. Keep bias, normalization, and PAIR gate parameters out of AdamW decay.
+    optimizer_param_groups = []
+    decay_param_count = 0
+    no_decay_param_count = 0
+
+    decay_count, no_decay_count = add_optimizer_param_groups(
+        optimizer_param_groups, vla, "vla", cfg.learning_rate, cfg.weight_decay
+    )
+    decay_param_count += decay_count
+    no_decay_param_count += no_decay_count
+
     if cfg.use_l1_regression:
-        trainable_params += [param for param in action_head.parameters() if param.requires_grad]
+        decay_count, no_decay_count = add_optimizer_param_groups(
+            optimizer_param_groups, action_head, "action_head", cfg.learning_rate, cfg.weight_decay
+        )
+        decay_param_count += decay_count
+        no_decay_param_count += no_decay_count
 
     if cfg.use_proprio:
-        trainable_params += [param for param in proprio_projector.parameters() if param.requires_grad]
+        decay_count, no_decay_count = add_optimizer_param_groups(
+            optimizer_param_groups, proprio_projector, "proprio_projector", cfg.learning_rate, cfg.weight_decay
+        )
+        decay_param_count += decay_count
+        no_decay_param_count += no_decay_count
+
     if cfg.use_pair_bridge:
-        trainable_params += [param for param in pair_bridge.parameters() if param.requires_grad]
+        decay_count, no_decay_count = add_optimizer_param_groups(
+            optimizer_param_groups, pair_bridge, "pair_bridge", cfg.learning_rate, cfg.weight_decay
+        )
+        decay_param_count += decay_count
+        no_decay_param_count += no_decay_count
+
     if distributed_state.is_main_process:
-        print(f"# total trainable params: {sum(p.numel() for p in trainable_params)}")
-    optimizer = AdamW(trainable_params, lr=cfg.learning_rate)
+        print(f"# total trainable params: {decay_param_count + no_decay_param_count}")
+        print(
+            f"# weight-decay params: {decay_param_count}; "
+            f"no-decay params: {no_decay_param_count}; weight_decay={cfg.weight_decay}"
+        )
+    optimizer = AdamW(optimizer_param_groups, lr=cfg.learning_rate)
 
     # Record original learning rate
     original_lr = optimizer.param_groups[0]["lr"]

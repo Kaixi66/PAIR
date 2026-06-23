@@ -67,7 +67,7 @@ def test_action_head_predict_action_without_proprio_forward():
     assert actions.shape == (batch_size, NUM_ACTIONS_CHUNK, 7)
 
 
-def test_action_head_post_norm_pair_gate_controls_injection():
+def test_action_head_post_stem_pair_gate_controls_injection():
     torch.manual_seed(13)
     hidden_dim = 16
     batch_size = 2
@@ -83,7 +83,7 @@ def test_action_head_post_norm_pair_gate_controls_injection():
     proprio_projector = nn.Linear(8, hidden_dim).to(torch.bfloat16)
     hidden_states = torch.randn(batch_size, num_layers, num_task_tokens + NUM_TOKENS, hidden_dim)
     proprio = torch.randn(batch_size, 8)
-    pair_init = torch.randn(batch_size, 7 * NUM_ACTIONS_CHUNK, hidden_dim)
+    pair_init = torch.randn(batch_size, NUM_ACTIONS_CHUNK, hidden_dim)
 
     default_actions = action_head.predict_action(
         hidden_states,
@@ -128,7 +128,7 @@ def test_action_head_accepts_per_step_pair_gate():
     proprio_projector = nn.Linear(8, hidden_dim).to(torch.bfloat16)
     hidden_states = torch.randn(batch_size, num_layers, num_task_tokens + NUM_TOKENS, hidden_dim)
     proprio = torch.randn(batch_size, 8)
-    pair_init = torch.randn(batch_size, 7 * NUM_ACTIONS_CHUNK, hidden_dim)
+    pair_init = torch.randn(batch_size, NUM_ACTIONS_CHUNK, hidden_dim)
 
     zero_step_gate_actions = action_head.predict_action(
         hidden_states,
@@ -167,7 +167,7 @@ def test_action_head_accepts_batched_per_step_pair_gate():
     proprio_projector = nn.Linear(8, hidden_dim).to(torch.bfloat16)
     hidden_states = torch.randn(batch_size, num_layers, num_task_tokens + NUM_TOKENS, hidden_dim)
     proprio = torch.randn(batch_size, 8)
-    pair_init = torch.randn(batch_size, 7 * NUM_ACTIONS_CHUNK, hidden_dim)
+    pair_init = torch.randn(batch_size, NUM_ACTIONS_CHUNK, hidden_dim)
 
     zero_gate_actions = action_head.predict_action(
         hidden_states,

@@ -13,7 +13,7 @@ set -euo pipefail
 # libero_spatial | libero_object | libero_goal | libero_10
 TASK_SUITES="${TASK_SUITES:-libero_spatial}"
 
-PRETRAINED_CHECKPOINT="${PRETRAINED_CHECKPOINT:-/umd-datapool/kaixi/PAIR/checkpoints/PAIR_spatial_AE_V2_init1_specialize}"
+PRETRAINED_CHECKPOINT="${PRETRAINED_CHECKPOINT:-/umd-datapool/kaixi/PAIR/checkpoints/l20_PAIR_v5_0.1w_fixed0.5_specialize_spatial}"
 GPU="${GPU:-7}"
 NUM_TRIALS_PER_TASK="${NUM_TRIALS_PER_TASK:-50}"
 SEED="${SEED:-7}"
@@ -21,7 +21,7 @@ NUM_STEPS_WAIT="${NUM_STEPS_WAIT:-10}"
 INITIAL_STATES_PATH="${INITIAL_STATES_PATH:-DEFAULT}"
 ENV_IMG_RES="${ENV_IMG_RES:-256}"
 
-# WandB is off by default for eval. Set USE_WANDB=True after `wandb login`.
+# WandB is off by default for eval. Set USE_WANDB=True after `wandb login`
 USE_WANDB="${USE_WANDB:-False}"
 WANDB_ENTITY="${WANDB_ENTITY:-kaixi-university-of-maryland}"
 WANDB_PROJECT="${WANDB_PROJECT:-PAIR}"
